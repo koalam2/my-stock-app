@@ -24,15 +24,36 @@ def init_connection():
         "https://www.googleapis.com/auth/drive"
     ]
     
-    # secrets에 gcp_json(전체 내용)이 있거나 gcp_service_account(개별 키)가 있는지 확인
-    if "gcp_json" in st.secrets:
-        creds_dict = json.loads(st.secrets["gcp_json"])
-    else:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    return client
+    # [안전장치] Secrets 설정 여부 확인
+    if "sheet_url" not in st.secrets:
+        st.error("🚨 `sheet_url` (구글 시트 주소) 설정이 없습니다.")
+        st.info("`.streamlit/secrets.toml` 파일에 `sheet_url`을 추가해주세요.")
+        st.stop()
+
+    if "gcp_json" not in st.secrets and "gcp_service_account" not in st.secrets:
+        st.error("🚨 구글 인증 키(`gcp_json` 또는 `gcp_service_account`) 설정이 없습니다.")
+        st.markdown("""
+        ### 🛠️ 해결 방법
+        1. **내 컴퓨터에서 실행 중이라면:**
+           - 프로젝트 폴더 안에 `.streamlit` 폴더를 만드세요.
+           - 그 안에 `secrets.toml` 파일을 만들고 키 내용을 붙여넣으세요.
+        2. **Streamlit Cloud 배포 중이라면:**
+           - 대시보드 > App Settings > Secrets 메뉴에 키 내용을 붙여넣으세요.
+        """)
+        st.stop()
+    
+    try:
+        if "gcp_json" in st.secrets:
+            creds_dict = json.loads(st.secrets["gcp_json"])
+        else:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        st.error(f"🚨 인증 정보 처리 중 오류가 발생했습니다: {e}")
+        st.stop()
 
 # 시트 데이터 로드 함수 (통합)
 def load_data_from_sheet(sheet_name):
@@ -50,12 +71,10 @@ def load_data_from_sheet(sheet_name):
                 return {} 
         
         if sheet_name == 'config':
-            # Config는 딕셔너리로 변환
             return {row['Key']: row['Value'] for row in data}
             
         df = pd.DataFrame(data)
         
-        # 데이터 타입 강제 변환
         if sheet_name == 'transactions':
             df['Date'] = pd.to_datetime(df['Date']).dt.date
             num_cols = ['Amount_USD', 'Quantity', 'Exchange_Rate', 'Total_KRW']
@@ -63,14 +82,13 @@ def load_data_from_sheet(sheet_name):
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 
         return df
+    except gspread.exceptions.WorksheetNotFound:
+        # 시트가 없을 경우 자동 생성 시도 또는 빈 값 반환
+        st.warning(f"⚠️ 구글 시트에 '{sheet_name}' 탭이 없습니다. 탭을 생성해주세요.")
+        return pd.DataFrame() if sheet_name != 'config' else {}
     except Exception as e:
-        # 에러 발생 시 기본값 반환 (앱이 멈추지 않도록)
-        if sheet_name == 'transactions':
-            return pd.DataFrame(columns=['Date', 'Type', 'Ticker', 'Sector', 'Amount_USD', 'Quantity', 'Exchange_Rate', 'Total_KRW'])
-        elif sheet_name == 'favorites':
-            return pd.DataFrame(columns=['Ticker', 'Sector'])
-        elif sheet_name == 'config':
-            return {}
+        st.error(f"데이터 로드 중 오류: {e}")
+        return pd.DataFrame() if sheet_name != 'config' else {}
 
 # 시트 데이터 저장 함수 (통합)
 def save_data_to_sheet(data, sheet_name):
@@ -78,21 +96,18 @@ def save_data_to_sheet(data, sheet_name):
         client = init_connection()
         sheet = client.open_by_url(st.secrets["sheet_url"]).worksheet(sheet_name)
         
-        sheet.clear() # 기존 데이터 삭제
+        sheet.clear() 
         
         if sheet_name == 'config':
-            # Config 딕셔너리를 리스트로 변환하여 저장
             rows = [['Key', 'Value']]
             for k, v in data.items():
                 rows.append([k, v])
             sheet.update(rows)
         else:
-            # DataFrame 저장 (날짜 등 문자열로 변환)
             df_save = data.copy()
             if 'Date' in df_save.columns:
                 df_save['Date'] = df_save['Date'].astype(str)
             
-            # 헤더와 데이터 업데이트
             sheet.update([df_save.columns.values.tolist()] + df_save.values.tolist())
             
     except Exception as e:
@@ -105,7 +120,6 @@ def load_config():
     if sheet_config:
         for k, v in sheet_config.items():
             try:
-                # 콤마 제거 후 정수 변환
                 sheet_config[k] = int(str(v).replace(',', '').replace('.', '').split('.')[0])
             except:
                 pass
@@ -191,10 +205,14 @@ def calculate_historical_assets(transactions_df):
     daily_df = pd.DataFrame(index=date_range)
     daily_df.index.name = 'Date'
     
-    usdkrw = fdr.DataReader('USD/KRW', start_date, end_date)['Close']
+    try:
+        usdkrw = fdr.DataReader('USD/KRW', start_date, end_date)['Close']
+        spy_data = fdr.DataReader('SPY', start_date - timedelta(days=7), end_date)['Close']
+    except:
+        # 데이터 로드 실패 시 빈 프레임 반환
+        return pd.DataFrame()
+
     daily_df['Exchange_Rate'] = usdkrw
-    
-    spy_data = fdr.DataReader('SPY', start_date - timedelta(days=7), end_date)['Close']
     daily_df['SPY_Price'] = spy_data
     
     daily_df['Exchange_Rate'] = daily_df['Exchange_Rate'].ffill().bfill()
@@ -599,7 +617,6 @@ if menu == "1. 총 자산 확인":
                 }
                 
                 df = pd.concat([df, pd.DataFrame([new_adj_data])], ignore_index=True)
-                # [수정] 구글 시트 저장 호출
                 save_data_to_sheet(df, 'transactions')
                 st.success(f"잔고 보정이 완료되었습니다! ({adj_type} {adj_amount:,.0f}원 처리)")
                 st.rerun()
@@ -766,7 +783,6 @@ elif menu == "2. 포트폴리오 분석":
         
         sector_stats = pf_df.groupby('Sector')[['Invested_KRW', 'Value_KRW']].sum().reset_index()
         sector_stats['Profit_KRW'] = sector_stats['Value_KRW'] - sector_stats['Invested_KRW']
-        # [수정] 한글 컬럼명 적용
         sector_stats['수익금(만원)'] = sector_stats['Profit_KRW'] / 10000
         
         sector_stats['ROI'] = (sector_stats['Profit_KRW'] / sector_stats['Invested_KRW'] * 100).fillna(0)
@@ -807,7 +823,6 @@ elif menu == "2. 포트폴리오 분석":
                 st.plotly_chart(fig_roi, use_container_width=True)
             
             with tab2:
-                # [수정] y축 한글 컬럼명 사용
                 fig_profit = px.bar(sector_stats, x='Sector', y='수익금(만원)', color='Sector',
                                     text_auto=',.0f',
                                     title="섹터별 수익금 (단위: 만원)",
@@ -821,7 +836,6 @@ elif menu == "2. 포트폴리오 분석":
         
         group_stats = pf_df.groupby('Group')[['Invested_KRW', 'Value_KRW']].sum().reset_index()
         group_stats['Profit_KRW'] = group_stats['Value_KRW'] - group_stats['Invested_KRW']
-        # [수정] 한글 컬럼명 적용
         group_stats['수익금(만원)'] = group_stats['Profit_KRW'] / 10000
         
         group_stats['ROI'] = (group_stats['Profit_KRW'] / group_stats['Invested_KRW'] * 100).fillna(0)
@@ -862,7 +876,6 @@ elif menu == "2. 포트폴리오 분석":
                 st.plotly_chart(fig_roi_g, use_container_width=True)
             
             with tab2_g:
-                # [수정] y축 한글 컬럼명 사용
                 fig_profit_g = px.bar(group_stats, x='Group', y='수익금(만원)', color='Group',
                                     text_auto=',.0f',
                                     title="그룹별 수익금 (단위: 만원)",
@@ -908,19 +921,17 @@ elif menu == "3. 수익 분석":
                 base_my_asset = plot_df['Total_Asset_KRW_10k'].iloc[0]
                 base_sp500 = plot_df['SP500_Sim_Asset_KRW_10k'].iloc[0]
 
-                plot_df['Rebased_My_Asset'] = plot_df['Total_Asset_KRW_10k']
-                plot_df['Rebased_SP500'] = plot_df['SP500_Sim_Asset_KRW_10k'] - base_sp500 + base_my_asset
-                plot_df['Rebased_Principal'] = plot_df['Invested_Principal_10k'] - base_principal + base_my_asset
+                plot_df['Rebased_My_Asset'] = plot_df['Total_Asset_KRW_10k'] - (base_my_asset - base_principal)
+                plot_df['Rebased_SP500'] = plot_df['SP500_Sim_Asset_KRW_10k'] - (base_sp500 - base_principal)
             else:
                 plot_df['Rebased_My_Asset'] = plot_df['Total_Asset_KRW_10k']
                 plot_df['Rebased_SP500'] = plot_df['SP500_Sim_Asset_KRW_10k']
-                plot_df['Rebased_Principal'] = plot_df['Invested_Principal_10k']
 
             
             fig_bm = go.Figure()
             fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_My_Asset'], mode='lines', name='내 총 자산 (실제)', line=dict(color='#d62728', width=2)))
             fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_SP500'], mode='lines', name='S&P 500 투자 가정', line=dict(color='#1f77b4', width=2)))
-            fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_Principal'], mode='lines', name='투자 원금 (기준)', line=dict(color='gray', dash='dash', width=1)))
+            fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Invested_Principal_10k'], mode='lines', name='투자 원금 (기준)', line=dict(color='gray', dash='dash', width=1)))
 
             fig_bm.update_layout(
                 xaxis_title="날짜", yaxis_title="평가금액 (단위: 만원)",
