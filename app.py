@@ -700,7 +700,6 @@ elif menu == "2. 포트폴리오 분석":
         
         sector_stats = pf_df.groupby('Sector')[['Invested_KRW', 'Value_KRW']].sum().reset_index()
         sector_stats['Profit_KRW'] = sector_stats['Value_KRW'] - sector_stats['Invested_KRW']
-        # [수정] 한글 컬럼명 적용
         sector_stats['수익금(만원)'] = sector_stats['Profit_KRW'] / 10000
         
         sector_stats['ROI'] = (sector_stats['Profit_KRW'] / sector_stats['Invested_KRW'] * 100).fillna(0)
@@ -741,7 +740,6 @@ elif menu == "2. 포트폴리오 분석":
                 st.plotly_chart(fig_roi, use_container_width=True)
             
             with tab2:
-                # [수정] y축 한글 라벨 적용
                 fig_profit = px.bar(sector_stats, x='Sector', y='수익금(만원)', color='Sector',
                                     text_auto=',.0f',
                                     title="섹터별 수익금 (단위: 만원)",
@@ -755,7 +753,6 @@ elif menu == "2. 포트폴리오 분석":
         
         group_stats = pf_df.groupby('Group')[['Invested_KRW', 'Value_KRW']].sum().reset_index()
         group_stats['Profit_KRW'] = group_stats['Value_KRW'] - group_stats['Invested_KRW']
-        # [수정] 한글 컬럼명 적용
         group_stats['수익금(만원)'] = group_stats['Profit_KRW'] / 10000
         
         group_stats['ROI'] = (group_stats['Profit_KRW'] / group_stats['Invested_KRW'] * 100).fillna(0)
@@ -796,7 +793,6 @@ elif menu == "2. 포트폴리오 분석":
                 st.plotly_chart(fig_roi_g, use_container_width=True)
             
             with tab2_g:
-                # [수정] y축 한글 라벨 적용
                 fig_profit_g = px.bar(group_stats, x='Group', y='수익금(만원)', color='Group',
                                     text_auto=',.0f',
                                     title="그룹별 수익금 (단위: 만원)",
@@ -843,9 +839,7 @@ elif menu == "3. 수익 분석":
                 base_sp500 = plot_df['SP500_Sim_Asset_KRW_10k'].iloc[0]
 
                 plot_df['Rebased_My_Asset'] = plot_df['Total_Asset_KRW_10k']
-                # S&P 500: 시작일의 가치를 '내 자산 평가액'과 동일하게 맞춤 (Gap 보정)
                 plot_df['Rebased_SP500'] = plot_df['SP500_Sim_Asset_KRW_10k'] - base_sp500 + base_my_asset
-                # [NEW] 원금: 시작일의 가치를 '내 자산 평가액'과 동일하게 맞춤 (추가입금분만 변동)
                 plot_df['Rebased_Principal'] = plot_df['Invested_Principal_10k'] - base_principal + base_my_asset
             else:
                 plot_df['Rebased_My_Asset'] = plot_df['Total_Asset_KRW_10k']
@@ -856,7 +850,6 @@ elif menu == "3. 수익 분석":
             fig_bm = go.Figure()
             fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_My_Asset'], mode='lines', name='내 총 자산 (실제)', line=dict(color='#d62728', width=2)))
             fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_SP500'], mode='lines', name='S&P 500 투자 가정', line=dict(color='#1f77b4', width=2)))
-            # [수정] 원금 라인을 보정된(Rebased) 데이터로 표시
             fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_Principal'], mode='lines', name='투자 원금 (보정)', line=dict(color='gray', dash='dash', width=1)))
 
             fig_bm.update_layout(
