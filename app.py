@@ -24,25 +24,13 @@ def init_connection():
         "https://www.googleapis.com/auth/drive"
     ]
     
-    # [안전장치] Secrets 설정 여부 확인
+    # Secrets 확인 및 예외 처리
     if "sheet_url" not in st.secrets:
-        st.error("🚨 `sheet_url` (구글 시트 주소) 설정이 없습니다.")
-        st.info("`.streamlit/secrets.toml` 파일에 `sheet_url`을 추가해주세요.")
+        st.error("🚨 `sheet_url` 설정이 없습니다. `.streamlit/secrets.toml`을 확인해주세요.")
         st.stop()
 
-    if "gcp_json" not in st.secrets and "gcp_service_account" not in st.secrets:
-        st.error("🚨 구글 인증 키(`gcp_json` 또는 `gcp_service_account`) 설정이 없습니다.")
-        st.markdown("""
-        ### 🛠️ 해결 방법
-        1. **내 컴퓨터에서 실행 중이라면:**
-           - 프로젝트 폴더 안에 `.streamlit` 폴더를 만드세요.
-           - 그 안에 `secrets.toml` 파일을 만들고 키 내용을 붙여넣으세요.
-        2. **Streamlit Cloud 배포 중이라면:**
-           - 대시보드 > App Settings > Secrets 메뉴에 키 내용을 붙여넣으세요.
-        """)
-        st.stop()
-    
     try:
+        # gcp_json(전체 문자열) 또는 gcp_service_account(딕셔너리) 확인
         if "gcp_json" in st.secrets:
             creds_dict = json.loads(st.secrets["gcp_json"])
         else:
@@ -52,81 +40,92 @@ def init_connection():
         client = gspread.authorize(creds)
         return client
     except Exception as e:
-        st.error(f"🚨 인증 정보 처리 중 오류가 발생했습니다: {e}")
+        st.error(f"🚨 구글 시트 연결 실패: {e}")
         st.stop()
 
-# 시트 데이터 로드 함수 (통합)
+# 데이터 로드 함수 (통합)
 def load_data_from_sheet(sheet_name):
     try:
         client = init_connection()
         sheet = client.open_by_url(st.secrets["sheet_url"]).worksheet(sheet_name)
         data = sheet.get_all_records()
         
+        # 데이터가 없을 경우 빈 구조 반환
         if not data:
             if sheet_name == 'transactions':
                 return pd.DataFrame(columns=['Date', 'Type', 'Ticker', 'Sector', 'Amount_USD', 'Quantity', 'Exchange_Rate', 'Total_KRW'])
             elif sheet_name == 'favorites':
                 return pd.DataFrame(columns=['Ticker', 'Sector'])
             elif sheet_name == 'config':
-                return {} 
+                return {}
         
+        # Config 탭은 딕셔너리로 변환
         if sheet_name == 'config':
-            return {row['Key']: row['Value'] for row in data}
+            return {str(row['Key']): row['Value'] for row in data}
             
         df = pd.DataFrame(data)
         
+        # 거래내역 탭은 데이터 타입 변환 필수
         if sheet_name == 'transactions':
             df['Date'] = pd.to_datetime(df['Date']).dt.date
+            # 숫자형 변환 (빈 문자열이나 오류 방지)
             num_cols = ['Amount_USD', 'Quantity', 'Exchange_Rate', 'Total_KRW']
             for col in num_cols:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 
         return df
+        
     except gspread.exceptions.WorksheetNotFound:
-        # 시트가 없을 경우 자동 생성 시도 또는 빈 값 반환
-        st.warning(f"⚠️ 구글 시트에 '{sheet_name}' 탭이 없습니다. 탭을 생성해주세요.")
-        return pd.DataFrame() if sheet_name != 'config' else {}
+        # 탭이 없을 경우 생성 안내 또는 빈 값 처리
+        if sheet_name == 'config': return {}
+        return pd.DataFrame(columns=['Ticker', 'Sector'] if sheet_name == 'favorites' else ['Date'])
     except Exception as e:
-        st.error(f"데이터 로드 중 오류: {e}")
-        return pd.DataFrame() if sheet_name != 'config' else {}
+        st.error(f"데이터 로드 중 오류 발생 ({sheet_name}): {e}")
+        return pd.DataFrame()
 
-# 시트 데이터 저장 함수 (통합)
+# 데이터 저장 함수 (통합)
 def save_data_to_sheet(data, sheet_name):
     try:
         client = init_connection()
         sheet = client.open_by_url(st.secrets["sheet_url"]).worksheet(sheet_name)
         
-        sheet.clear() 
+        sheet.clear() # 기존 데이터 삭제
         
         if sheet_name == 'config':
+            # Config 딕셔너리 -> 리스트 변환 저장
             rows = [['Key', 'Value']]
             for k, v in data.items():
                 rows.append([k, v])
             sheet.update(rows)
         else:
+            # DataFrame 저장 (날짜 객체 -> 문자열 변환)
             df_save = data.copy()
             if 'Date' in df_save.columns:
                 df_save['Date'] = df_save['Date'].astype(str)
             
+            # 헤더와 데이터 업데이트
             sheet.update([df_save.columns.values.tolist()] + df_save.values.tolist())
             
     except Exception as e:
-        st.error(f"구글 시트 저장 중 오류 발생: {e}")
+        st.error(f"데이터 저장 중 오류 발생 ({sheet_name}): {e}")
 
-# 설정 로드 함수
+# 설정 로드 헬퍼
 def load_config():
     default_config = {'goal1': 100000000, 'goal2': 1000000000}
     sheet_config = load_data_from_sheet('config')
+    
     if sheet_config:
         for k, v in sheet_config.items():
             try:
-                sheet_config[k] = int(str(v).replace(',', '').replace('.', '').split('.')[0])
+                # 쉼표 등 제거 후 정수 변환
+                clean_val = str(v).replace(',', '').replace('.', '').split('.')[0]
+                sheet_config[k] = int(clean_val)
             except:
                 pass
         default_config.update(sheet_config)
     return default_config
 
-# 설정 저장 함수
+# 설정 저장 헬퍼
 def save_config(goal1, goal2):
     config_data = {'goal1': goal1, 'goal2': goal2}
     save_data_to_sheet(config_data, 'config')
@@ -209,8 +208,7 @@ def calculate_historical_assets(transactions_df):
         usdkrw = fdr.DataReader('USD/KRW', start_date, end_date)['Close']
         spy_data = fdr.DataReader('SPY', start_date - timedelta(days=7), end_date)['Close']
     except:
-        # 데이터 로드 실패 시 빈 프레임 반환
-        return pd.DataFrame()
+        return pd.DataFrame() # 데이터 로드 실패 시
 
     daily_df['Exchange_Rate'] = usdkrw
     daily_df['SPY_Price'] = spy_data
@@ -423,7 +421,7 @@ if st.session_state['last_menu'] != menu:
         if 'fav_selector' in st.session_state:
             del st.session_state['fav_selector']
 
-# [데이터 로드] 구글 시트 사용 (파일명 대신 시트 이름 전달)
+# [데이터 로드] 구글 시트 사용
 df = load_data_from_sheet('transactions')
 current_rate = get_exchange_rate()
 
@@ -827,7 +825,7 @@ elif menu == "2. 포트폴리오 분석":
                                     text_auto=',.0f',
                                     title="섹터별 수익금 (단위: 만원)",
                                     color_discrete_map=SECTOR_COLOR_MAP,
-                                    labels={'Sector': '섹터'}) 
+                                    labels={'Sector': '섹터', '수익금(만원)': '수익금(만원)'}) 
                 fig_profit.update_layout(showlegend=False, yaxis_title="수익금 (만원)")
                 st.plotly_chart(fig_profit, use_container_width=True)
 
@@ -880,7 +878,7 @@ elif menu == "2. 포트폴리오 분석":
                                     text_auto=',.0f',
                                     title="그룹별 수익금 (단위: 만원)",
                                     color_discrete_map=GROUP_COLOR_MAP,
-                                    labels={'Group': '그룹'}) 
+                                    labels={'Group': '그룹', '수익금(만원)': '수익금(만원)'}) 
                 fig_profit_g.update_layout(showlegend=False, yaxis_title="수익금 (만원)")
                 st.plotly_chart(fig_profit_g, use_container_width=True)
 
@@ -973,7 +971,7 @@ elif menu == "4. 거래 기록 (입출금/매매)":
     with st.expander("⭐ 즐겨찾기(단축) 종목 관리 (클릭해서 열기/닫기)"):
         st.caption("자주 거래하는 종목을 등록하면 아래에서 쉽게 선택할 수 있습니다. 행을 선택하고 Delete 키를 누르면 삭제됩니다.")
         
-        fav_df = load_favorites()
+        fav_df = load_data_from_sheet('favorites')
         
         edited_fav_df = st.data_editor(
             fav_df,
@@ -991,7 +989,6 @@ elif menu == "4. 거래 기록 (입출금/매매)":
         )
         
         if st.button("즐겨찾기 변경사항 저장"):
-            # [수정] 구글 시트 저장 호출
             save_data_to_sheet(edited_fav_df, 'favorites')
             st.success("즐겨찾기 목록이 업데이트되었습니다!")
             st.rerun()
@@ -1001,10 +998,10 @@ elif menu == "4. 거래 기록 (입출금/매매)":
     tx_type = st.radio("거래 종류 선택", ["매수", "매도", "입금", "출금", "배당", "수수료", "양도세매매"], horizontal=True, key="tx_type_radio")
 
     if tx_type in ["매수", "매도", "양도세매매"]:
-        current_favs = load_favorites()
+        current_favs = load_data_from_sheet('favorites')
         def update_form_from_fav():
             selection = st.session_state.fav_selector
-            loaded_favs = load_favorites()
+            loaded_favs = load_data_from_sheet('favorites')
             if selection != "직접 입력" and not loaded_favs.empty:
                 row = loaded_favs[loaded_favs['Ticker'] == selection].iloc[0]
                 st.session_state.form_ticker = row['Ticker']
@@ -1095,11 +1092,10 @@ elif menu == "4. 거래 기록 (입출금/매매)":
                 }
                 
                 df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
-                # [수정] 구글 시트 저장 호출
                 save_data_to_sheet(df, 'transactions')
 
                 if tx_type in ['매수', '매도', '양도세매매']:
-                    fav_df = load_favorites()
+                    fav_df = load_data_from_sheet('favorites')
                     
                     if ticker in fav_df['Ticker'].values:
                         fav_df.loc[fav_df['Ticker'] == ticker, 'Sector'] = sector
@@ -1107,7 +1103,6 @@ elif menu == "4. 거래 기록 (입출금/매매)":
                         new_fav = pd.DataFrame([{'Ticker': ticker, 'Sector': sector}])
                         fav_df = pd.concat([fav_df, new_fav], ignore_index=True)
                     
-                    # [수정] 구글 시트 저장 호출
                     save_data_to_sheet(fav_df, 'favorites')
                     st.toast(f"⭐ '{ticker}' 종목이 즐겨찾기에 반영되었습니다!", icon="✅")
 
@@ -1138,7 +1133,6 @@ elif menu == "4. 거래 기록 (입출금/매매)":
         )
         
         if st.button("거래 내역 변경사항 저장", type="primary"):
-            # [수정] 구글 시트 저장 호출
             save_data_to_sheet(edited_df, 'transactions')
             st.success("거래 내역이 업데이트되었습니다!")
             st.rerun()
