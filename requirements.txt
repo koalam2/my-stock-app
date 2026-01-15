@@ -2,3 +2,5 @@ streamlit
 pandas
 finance-datareader
 plotly
+gspread
+oauth2client
