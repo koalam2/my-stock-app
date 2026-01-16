@@ -24,13 +24,12 @@ def init_connection():
         "https://www.googleapis.com/auth/drive"
     ]
     
-    # Secrets 확인 및 예외 처리
+    # Secrets 설정 확인
     if "sheet_url" not in st.secrets:
-        st.error("🚨 `sheet_url` 설정이 없습니다. `.streamlit/secrets.toml`을 확인해주세요.")
+        st.error("🚨 `sheet_url` 설정이 없습니다.")
         st.stop()
-
+        
     try:
-        # gcp_json(전체 문자열) 또는 gcp_service_account(딕셔너리) 확인
         if "gcp_json" in st.secrets:
             creds_dict = json.loads(st.secrets["gcp_json"])
         else:
@@ -43,89 +42,77 @@ def init_connection():
         st.error(f"🚨 구글 시트 연결 실패: {e}")
         st.stop()
 
-# 데이터 로드 함수 (통합)
+# 시트 데이터 로드 함수
 def load_data_from_sheet(sheet_name):
     try:
         client = init_connection()
         sheet = client.open_by_url(st.secrets["sheet_url"]).worksheet(sheet_name)
         data = sheet.get_all_records()
         
-        # 데이터가 없을 경우 빈 구조 반환
         if not data:
             if sheet_name == 'transactions':
                 return pd.DataFrame(columns=['Date', 'Type', 'Ticker', 'Sector', 'Amount_USD', 'Quantity', 'Exchange_Rate', 'Total_KRW'])
             elif sheet_name == 'favorites':
                 return pd.DataFrame(columns=['Ticker', 'Sector'])
             elif sheet_name == 'config':
-                return {}
+                return {} 
         
-        # Config 탭은 딕셔너리로 변환
         if sheet_name == 'config':
-            return {str(row['Key']): row['Value'] for row in data}
+            return {row['Key']: row['Value'] for row in data}
             
         df = pd.DataFrame(data)
         
-        # 거래내역 탭은 데이터 타입 변환 필수
         if sheet_name == 'transactions':
             df['Date'] = pd.to_datetime(df['Date']).dt.date
-            # 숫자형 변환 (빈 문자열이나 오류 방지)
             num_cols = ['Amount_USD', 'Quantity', 'Exchange_Rate', 'Total_KRW']
             for col in num_cols:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 
         return df
-        
-    except gspread.exceptions.WorksheetNotFound:
-        # 탭이 없을 경우 생성 안내 또는 빈 값 처리
-        if sheet_name == 'config': return {}
-        return pd.DataFrame(columns=['Ticker', 'Sector'] if sheet_name == 'favorites' else ['Date'])
     except Exception as e:
-        st.error(f"데이터 로드 중 오류 발생 ({sheet_name}): {e}")
-        return pd.DataFrame()
+        if sheet_name == 'transactions':
+            return pd.DataFrame(columns=['Date', 'Type', 'Ticker', 'Sector', 'Amount_USD', 'Quantity', 'Exchange_Rate', 'Total_KRW'])
+        elif sheet_name == 'favorites':
+            return pd.DataFrame(columns=['Ticker', 'Sector'])
+        elif sheet_name == 'config':
+            return {}
 
-# 데이터 저장 함수 (통합)
+# 시트 데이터 저장 함수
 def save_data_to_sheet(data, sheet_name):
     try:
         client = init_connection()
         sheet = client.open_by_url(st.secrets["sheet_url"]).worksheet(sheet_name)
         
-        sheet.clear() # 기존 데이터 삭제
+        sheet.clear() 
         
         if sheet_name == 'config':
-            # Config 딕셔너리 -> 리스트 변환 저장
             rows = [['Key', 'Value']]
             for k, v in data.items():
                 rows.append([k, v])
             sheet.update(rows)
         else:
-            # DataFrame 저장 (날짜 객체 -> 문자열 변환)
             df_save = data.copy()
             if 'Date' in df_save.columns:
                 df_save['Date'] = df_save['Date'].astype(str)
-            
-            # 헤더와 데이터 업데이트
             sheet.update([df_save.columns.values.tolist()] + df_save.values.tolist())
             
     except Exception as e:
-        st.error(f"데이터 저장 중 오류 발생 ({sheet_name}): {e}")
+        st.error(f"구글 시트 저장 중 오류 발생: {e}")
 
-# 설정 로드 헬퍼
+# 설정 로드 함수
 def load_config():
     default_config = {'goal1': 100000000, 'goal2': 1000000000}
     sheet_config = load_data_from_sheet('config')
-    
     if sheet_config:
         for k, v in sheet_config.items():
             try:
-                # 쉼표 등 제거 후 정수 변환
-                clean_val = str(v).replace(',', '').replace('.', '').split('.')[0]
-                sheet_config[k] = int(clean_val)
+                sheet_config[k] = int(str(v).replace(',', '').replace('.', '').split('.')[0])
             except:
                 pass
         default_config.update(sheet_config)
     return default_config
 
-# 설정 저장 헬퍼
+# 설정 저장 함수
 def save_config(goal1, goal2):
     config_data = {'goal1': goal1, 'goal2': goal2}
     save_data_to_sheet(config_data, 'config')
@@ -208,7 +195,7 @@ def calculate_historical_assets(transactions_df):
         usdkrw = fdr.DataReader('USD/KRW', start_date, end_date)['Close']
         spy_data = fdr.DataReader('SPY', start_date - timedelta(days=7), end_date)['Close']
     except:
-        return pd.DataFrame() # 데이터 로드 실패 시
+        return pd.DataFrame()
 
     daily_df['Exchange_Rate'] = usdkrw
     daily_df['SPY_Price'] = spy_data
@@ -516,6 +503,31 @@ def color_negative_red(val):
 if menu == "1. 총 자산 확인":
     st.title("💰 총 자산 현황")
     
+    # [NEW] 어제 대비 변동액 계산
+    # 과거 데이터 로드 (캐싱되어 있음)
+    daily_df = calculate_historical_assets(df)
+    
+    diff_val = 0
+    yesterday_asset = 0
+    
+    if not daily_df.empty:
+        # 어제 날짜 계산 (오늘 - 1일)
+        yesterday = datetime.now().date() - timedelta(days=1)
+        yesterday_ts = pd.Timestamp(yesterday)
+        
+        # 어제 데이터가 인덱스에 있는지 확인
+        if yesterday_ts in daily_df.index:
+            yesterday_asset = daily_df.loc[yesterday_ts]['Total_Asset_KRW']
+        else:
+            # 어제 데이터가 없으면(휴일 등), 가장 최근의 과거 데이터 찾기
+            past_data = daily_df[daily_df.index < pd.Timestamp(datetime.now().date())]
+            if not past_data.empty:
+                yesterday_asset = past_data.iloc[-1]['Total_Asset_KRW']
+            else:
+                yesterday_asset = current_total_asset_krw # 비교 대상 없음
+        
+        diff_val = current_total_asset_krw - yesterday_asset
+    
     total_stock_eval_usd = 0
     stock_details = []
     
@@ -568,7 +580,9 @@ if menu == "1. 총 자산 확인":
     total_roi_krw = current_total_asset_krw - net_invest_krw
     total_roi_percent = (total_roi_krw / net_invest_krw * 100) if net_invest_krw != 0 else 0
 
+    # [수정] 메트릭에 delta 추가하여 어제 대비 변동 표시
     st.markdown(f"### 🏦 총 자산: {current_total_asset_krw:,.0f} 원")
+    st.caption(f"전일 대비: {diff_val:+,.0f} 원 ({ (diff_val/yesterday_asset*100) if yesterday_asset>0 else 0 :+.2f}%)")
     
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("투자 원금 (순입금)", f"{net_invest_krw:,.0f} 원")
@@ -781,6 +795,7 @@ elif menu == "2. 포트폴리오 분석":
         
         sector_stats = pf_df.groupby('Sector')[['Invested_KRW', 'Value_KRW']].sum().reset_index()
         sector_stats['Profit_KRW'] = sector_stats['Value_KRW'] - sector_stats['Invested_KRW']
+        # [수정] 한글 컬럼명 적용
         sector_stats['수익금(만원)'] = sector_stats['Profit_KRW'] / 10000
         
         sector_stats['ROI'] = (sector_stats['Profit_KRW'] / sector_stats['Invested_KRW'] * 100).fillna(0)
@@ -821,6 +836,7 @@ elif menu == "2. 포트폴리오 분석":
                 st.plotly_chart(fig_roi, use_container_width=True)
             
             with tab2:
+                # [수정] y축 한글 컬럼명 사용
                 fig_profit = px.bar(sector_stats, x='Sector', y='수익금(만원)', color='Sector',
                                     text_auto=',.0f',
                                     title="섹터별 수익금 (단위: 만원)",
@@ -834,6 +850,7 @@ elif menu == "2. 포트폴리오 분석":
         
         group_stats = pf_df.groupby('Group')[['Invested_KRW', 'Value_KRW']].sum().reset_index()
         group_stats['Profit_KRW'] = group_stats['Value_KRW'] - group_stats['Invested_KRW']
+        # [수정] 한글 컬럼명 적용
         group_stats['수익금(만원)'] = group_stats['Profit_KRW'] / 10000
         
         group_stats['ROI'] = (group_stats['Profit_KRW'] / group_stats['Invested_KRW'] * 100).fillna(0)
@@ -874,6 +891,7 @@ elif menu == "2. 포트폴리오 분석":
                 st.plotly_chart(fig_roi_g, use_container_width=True)
             
             with tab2_g:
+                # [수정] y축 한글 컬럼명 사용
                 fig_profit_g = px.bar(group_stats, x='Group', y='수익금(만원)', color='Group',
                                     text_auto=',.0f',
                                     title="그룹별 수익금 (단위: 만원)",
