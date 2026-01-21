@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import FinanceDataReader as fdr
+import yfinance as yf # [NEW] 더 안정적인 주가 데이터 라이브러리
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots 
@@ -24,7 +25,6 @@ def init_connection():
         "https://www.googleapis.com/auth/drive"
     ]
     
-    # Secrets 설정 확인
     if "sheet_url" not in st.secrets:
         st.error("🚨 `sheet_url` 설정이 없습니다.")
         st.stop()
@@ -66,6 +66,9 @@ def load_data_from_sheet(sheet_name):
             df['Date'] = pd.to_datetime(df['Date']).dt.date
             num_cols = ['Amount_USD', 'Quantity', 'Exchange_Rate', 'Total_KRW']
             for col in num_cols:
+                # 쉼표 제거 후 숫자 변환
+                if df[col].dtype == object:
+                     df[col] = df[col].astype(str).str.replace(',', '')
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 
         return df
@@ -152,32 +155,44 @@ def get_group_by_sector(sector):
     elif sector in bond: return "채권"
     else: return "기타"
 
-# API 데이터 가져오기
+# [수정] yfinance를 사용하여 현재가 가져오기 (더 안정적)
+@st.cache_data(ttl=600)
+def get_current_price(ticker):
+    try:
+        # yfinance ticker 객체 생성
+        stock = yf.Ticker(ticker)
+        # 최근 1일 데이터 조회
+        history = stock.history(period="1d")
+        if not history.empty:
+            return history['Close'].iloc[-1]
+        return 0.0
+    except:
+        return 0.0
+
+# [수정] 환율은 FDR 유지 (안정적임) 또는 yfinance로 변경 가능
 @st.cache_data(ttl=3600)
 def get_exchange_rate():
     try:
         df = fdr.DataReader('USD/KRW', start=datetime.now() - timedelta(days=7))
         return df['Close'].iloc[-1]
     except:
-        return 1300.0
+        # FDR 실패 시 yfinance 시도 (백업)
+        try:
+            return yf.Ticker("KRW=X").history(period="1d")['Close'].iloc[-1]
+        except:
+            return 1300.0
 
-@st.cache_data(ttl=600)
-def get_current_price(ticker):
-    try:
-        df = fdr.DataReader(ticker, start=datetime.now() - timedelta(days=7))
-        return df['Close'].iloc[-1]
-    except:
-        return 0.0
-
+# [수정] S&P 500 데이터도 yfinance 사용
 @st.cache_data(ttl=3600*24)
 def get_sp500_data():
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=365)
-    df = fdr.DataReader('US500', start_date, end_date)
-    if df.empty:
-        df = fdr.DataReader('SPY', start_date, end_date)
-    return df
+    try:
+        # SPY ETF 사용
+        df = yf.Ticker("SPY").history(period="1y")
+        return df # Close 컬럼 포함됨
+    except:
+        return pd.DataFrame()
 
+# [수정] 과거 자산 계산 로직 (yfinance 적용)
 @st.cache_data(ttl=3600)
 def calculate_historical_assets(transactions_df):
     if transactions_df.empty:
@@ -191,26 +206,45 @@ def calculate_historical_assets(transactions_df):
     daily_df = pd.DataFrame(index=date_range)
     daily_df.index.name = 'Date'
     
+    # 환율 및 SPY 데이터 (yfinance 활용)
+    # yfinance download는 여러 티커 한번에 가능하지만 여기선 개별 처리 유지
     try:
-        usdkrw = fdr.DataReader('USD/KRW', start_date, end_date)['Close']
-        spy_data = fdr.DataReader('SPY', start_date - timedelta(days=7), end_date)['Close']
+        usdkrw = yf.download("KRW=X", start=start_date, end=end_date + timedelta(days=1), progress=False)['Close']
+        if isinstance(usdkrw, pd.DataFrame): usdkrw = usdkrw.squeeze() # Series로 변환
+        
+        spy_data = yf.download("SPY", start=start_date, end=end_date + timedelta(days=1), progress=False)['Close']
+        if isinstance(spy_data, pd.DataFrame): spy_data = spy_data.squeeze()
+        
+        daily_df['Exchange_Rate'] = usdkrw
+        daily_df['SPY_Price'] = spy_data
     except:
         return pd.DataFrame()
 
-    daily_df['Exchange_Rate'] = usdkrw
-    daily_df['SPY_Price'] = spy_data
-    
     daily_df['Exchange_Rate'] = daily_df['Exchange_Rate'].ffill().bfill()
     daily_df['SPY_Price'] = daily_df['SPY_Price'].ffill().bfill()
 
     tickers = transactions_df[transactions_df['Ticker'].notna() & (transactions_df['Ticker'] != 'CASH')]['Ticker'].unique()
     price_data = {}
-    for t in tickers:
+    
+    # yfinance로 한 번에 다운로드 (속도 향상)
+    if len(tickers) > 0:
         try:
-            df = fdr.DataReader(t, start_date - timedelta(days=7), end_date)
-            price_data[t] = df['Close']
+            # yfinance는 리스트로 티커를 받음
+            tickers_str = " ".join(tickers)
+            data = yf.download(tickers_str, start=start_date, end=end_date + timedelta(days=1), progress=False)['Close']
+            
+            for t in tickers:
+                if len(tickers) == 1:
+                    price_data[t] = data
+                else:
+                    price_data[t] = data[t]
         except:
-            price_data[t] = pd.Series(0, index=date_range) 
+            pass
+
+    # 누락된 데이터 처리
+    for t in tickers:
+        if t not in price_data:
+            price_data[t] = pd.Series(0, index=date_range)
     
     prices_df = pd.DataFrame(price_data).reindex(date_range).ffill().bfill()
     
@@ -580,7 +614,6 @@ if menu == "1. 총 자산 확인":
     total_roi_krw = current_total_asset_krw - net_invest_krw
     total_roi_percent = (total_roi_krw / net_invest_krw * 100) if net_invest_krw != 0 else 0
 
-    # [수정] 메트릭에 delta 추가하여 어제 대비 변동 표시
     st.markdown(f"### 🏦 총 자산: {current_total_asset_krw:,.0f} 원")
     st.caption(f"전일 대비: {diff_val:+,.0f} 원 ({ (diff_val/yesterday_asset*100) if yesterday_asset>0 else 0 :+.2f}%)")
     
