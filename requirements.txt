@@ -4,3 +4,4 @@ finance-datareader
 plotly
 gspread
 oauth2client
+yfinance  <-- 이 줄을 추가하세요!
