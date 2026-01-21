@@ -4,5 +4,4 @@ finance-datareader
 plotly
 gspread
 oauth2client
-yfinance
 
