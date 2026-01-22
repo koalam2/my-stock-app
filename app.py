@@ -918,13 +918,22 @@ elif menu == "3. 수익 분석":
             st.subheader("1. 벤치마크 비교 (시장 vs 내 자산)")
             st.caption("모든 입출금을 S&P 500(SPY ETF)에 투자했다고 가정했을 때의 성과와 실제 내 자산을 비교합니다.")
             
-            period_option = st.radio("기간 선택", ["최근 1년", "전체 기간", "직접 입력"], horizontal=True, key="benchmark_period_select")
+            # [수정됨] "올해 (YTD)" 옵션 추가
+            period_option = st.radio("기간 선택", ["올해 (YTD)", "최근 1년", "전체 기간", "직접 입력"], horizontal=True, key="benchmark_period_select")
             
             plot_df = daily_df.copy()
-            if period_option == "최근 1년":
+
+            # [수정됨] 필터링 로직에 "올해 (YTD)" 추가
+            if period_option == "올해 (YTD)":
+                start_of_year = datetime(datetime.now().year, 1, 1)
+                # 인덱스(Timestamp)와 비교하기 위해 pd.Timestamp로 변환
+                plot_df = daily_df[daily_df.index >= pd.Timestamp(start_of_year)].copy()
+
+            elif period_option == "최근 1년":
                 one_year_ago = datetime.now() - timedelta(days=365)
                 if daily_df.index.min() < one_year_ago:
                     plot_df = daily_df[daily_df.index >= one_year_ago].copy()
+            
             elif period_option == "직접 입력":
                 min_date = daily_df.index.min().date()
                 max_date = daily_df.index.max().date()
@@ -932,6 +941,7 @@ elif menu == "3. 수익 분석":
                 custom_start_ts = pd.Timestamp(custom_start)
                 plot_df = daily_df[daily_df.index >= custom_start_ts].copy()
 
+            # ... (이하 그래프 그리는 로직은 기존과 동일) ...
             if not plot_df.empty:
                 base_principal = plot_df['Invested_Principal_10k'].iloc[0]
                 base_my_asset = plot_df['Total_Asset_KRW_10k'].iloc[0]
@@ -1236,3 +1246,4 @@ elif menu == "5. 세금 관리 (양도세)":
             st.info(f"➕ 이 해에 납부한 총 수수료: **{total_fees:,.0f}원** (실현 손익에서 일괄 차감됨)")
         else:
             st.write("해당 연도의 매도 내역이 없습니다.")
+
