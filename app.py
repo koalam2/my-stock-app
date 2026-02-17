@@ -916,17 +916,15 @@ elif menu == "3. 수익 분석":
             daily_df['Profit_KRW_10k'] = daily_df['Profit_KRW'] / 10000
 
             st.subheader("1. 벤치마크 비교 (시장 vs 내 자산)")
-            st.caption("모든 입출금을 S&P 500(SPY ETF)에 투자했다고 가정했을 때의 성과와 실제 내 자산을 비교합니다.")
+            st.caption("선택한 기간의 **시작일 자산**을 기준으로, S&P 500 투자 가정 시 성과와 실제 내 자산 성과를 비교합니다.")
             
-            # [수정됨] "올해 (YTD)" 옵션 추가
             period_option = st.radio("기간 선택", ["올해 (YTD)", "최근 1년", "전체 기간", "직접 입력"], horizontal=True, key="benchmark_period_select")
             
             plot_df = daily_df.copy()
 
-            # [수정됨] 필터링 로직에 "올해 (YTD)" 추가
+            # 기간 필터링
             if period_option == "올해 (YTD)":
                 start_of_year = datetime(datetime.now().year, 1, 1)
-                # 인덱스(Timestamp)와 비교하기 위해 pd.Timestamp로 변환
                 plot_df = daily_df[daily_df.index >= pd.Timestamp(start_of_year)].copy()
 
             elif period_option == "최근 1년":
@@ -941,26 +939,71 @@ elif menu == "3. 수익 분석":
                 custom_start_ts = pd.Timestamp(custom_start)
                 plot_df = daily_df[daily_df.index >= custom_start_ts].copy()
 
-            # ... (이하 그래프 그리는 로직은 기존과 동일) ...
+            # --------------------------------------------------------------------------------
+            # [수정된 부분] 리베이스(Rebase) 로직: 시작일의 '내 자산 평가액'을 기준으로 통일
+            # --------------------------------------------------------------------------------
             if not plot_df.empty:
-                base_principal = plot_df['Invested_Principal_10k'].iloc[0]
-                base_my_asset = plot_df['Total_Asset_KRW_10k'].iloc[0]
-                base_sp500 = plot_df['SP500_Sim_Asset_KRW_10k'].iloc[0]
+                # 1. 기준점 잡기 (선택한 기간의 첫 날 데이터)
+                start_my_asset = plot_df['Total_Asset_KRW_10k'].iloc[0]
+                start_sp500_sim = plot_df['SP500_Sim_Asset_KRW_10k'].iloc[0]
+                start_principal = plot_df['Invested_Principal_10k'].iloc[0]
 
-                plot_df['Rebased_My_Asset'] = plot_df['Total_Asset_KRW_10k'] - (base_my_asset - base_principal)
-                plot_df['Rebased_SP500'] = plot_df['SP500_Sim_Asset_KRW_10k'] - (base_sp500 - base_principal)
-            else:
+                # 2. 내 자산 (실제 데이터 그대로 사용)
                 plot_df['Rebased_My_Asset'] = plot_df['Total_Asset_KRW_10k']
-                plot_df['Rebased_SP500'] = plot_df['SP500_Sim_Asset_KRW_10k']
 
-            
+                # 3. S&P 500 (비율 조정)
+                # 시작일의 S&P500 시뮬레이션 금액과 내 자산 금액의 비율을 계산하여 전체 기간에 적용
+                # 의미: "이 기간 시작일에 내 자산만큼의 돈을 S&P500에 넣었다면?"
+                if start_sp500_sim != 0:
+                    sp500_ratio = start_my_asset / start_sp500_sim
+                    plot_df['Rebased_SP500'] = plot_df['SP500_Sim_Asset_KRW_10k'] * sp500_ratio
+                else:
+                    plot_df['Rebased_SP500'] = plot_df['SP500_Sim_Asset_KRW_10k']
+
+                # 4. 투자 원금 (차액 보정)
+                # 시작일의 내 자산 금액에서 출발하되, 이후의 '추가 입출금'만 반영
+                # 공식: (현재 원금 - 시작일 원금) + 시작일 내 자산
+                plot_df['Rebased_Principal'] = (plot_df['Invested_Principal_10k'] - start_principal) + start_my_asset
+
+            else:
+                # 데이터가 없을 경우 초기화
+                plot_df['Rebased_My_Asset'] = 0
+                plot_df['Rebased_SP500'] = 0
+                plot_df['Rebased_Principal'] = 0
+
+            # 그래프 그리기
             fig_bm = go.Figure()
-            fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_My_Asset'], mode='lines', name='내 총 자산 (실제)', line=dict(color='#d62728', width=2)))
-            fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_SP500'], mode='lines', name='S&P 500 투자 가정', line=dict(color='#1f77b4', width=2)))
-            fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Invested_Principal_10k'], mode='lines', name='투자 원금 (기준)', line=dict(color='gray', dash='dash', width=1)))
+            
+            # 내 자산 라인
+            fig_bm.add_trace(go.Scatter(
+                x=plot_df.index, 
+                y=plot_df['Rebased_My_Asset'], 
+                mode='lines', 
+                name='내 총 자산 (실제)', 
+                line=dict(color='#d62728', width=2)
+            ))
+            
+            # S&P 500 라인
+            fig_bm.add_trace(go.Scatter(
+                x=plot_df.index, 
+                y=plot_df['Rebased_SP500'], 
+                mode='lines', 
+                name='S&P 500 투자 가정', 
+                line=dict(color='#1f77b4', width=2)
+            ))
+            
+            # 원금(현금) 라인
+            fig_bm.add_trace(go.Scatter(
+                x=plot_df.index, 
+                y=plot_df['Rebased_Principal'], 
+                mode='lines', 
+                name='현금 보유 가정 (입출금 반영)', 
+                line=dict(color='gray', dash='dash', width=1)
+            ))
 
             fig_bm.update_layout(
-                xaxis_title="날짜", yaxis_title="평가금액 (단위: 만원)",
+                xaxis_title="날짜", 
+                yaxis_title="평가금액 (단위: 만원)",
                 hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
@@ -1246,4 +1289,5 @@ elif menu == "5. 세금 관리 (양도세)":
             st.info(f"➕ 이 해에 납부한 총 수수료: **{total_fees:,.0f}원** (실현 손익에서 일괄 차감됨)")
         else:
             st.write("해당 연도의 매도 내역이 없습니다.")
+
 
