@@ -3,7 +3,6 @@ import pandas as pd
 import FinanceDataReader as fdr
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots 
 from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -50,10 +49,13 @@ def load_data_from_sheet(sheet_name):
         data = sheet.get_all_records()
         
         if not data:
+            # 시트별 빈 데이터프레임 구조 정의
             if sheet_name == 'transactions':
                 return pd.DataFrame(columns=['Date', 'Type', 'Ticker', 'Sector', 'Amount_USD', 'Quantity', 'Exchange_Rate', 'Total_KRW'])
             elif sheet_name == 'favorites':
                 return pd.DataFrame(columns=['Ticker', 'Sector'])
+            elif sheet_name == 'memos':  # [NEW] 메모 시트
+                return pd.DataFrame(columns=['Date', 'Title', 'Content', 'Color'])
             elif sheet_name == 'config':
                 return {} 
         
@@ -70,10 +72,13 @@ def load_data_from_sheet(sheet_name):
                 
         return df
     except Exception as e:
+        # 에러 발생 시 빈 객체 반환
         if sheet_name == 'transactions':
             return pd.DataFrame(columns=['Date', 'Type', 'Ticker', 'Sector', 'Amount_USD', 'Quantity', 'Exchange_Rate', 'Total_KRW'])
         elif sheet_name == 'favorites':
             return pd.DataFrame(columns=['Ticker', 'Sector'])
+        elif sheet_name == 'memos':
+            return pd.DataFrame(columns=['Date', 'Title', 'Content', 'Color'])
         elif sheet_name == 'config':
             return {}
 
@@ -117,12 +122,11 @@ def save_config(goal1, goal2):
     config_data = {'goal1': goal1, 'goal2': goal2}
     save_data_to_sheet(config_data, 'config')
 
-
 # 섹터 및 그룹 정의
 SECTOR_OPTIONS = [
     'IT/반도체', '커뮤니케이션', '경기소비재', 
     '필수소비재', '헬스케어', '유틸리티',   
-    '금융', '에너지/소재', '산업재',       
+    '금융', '에너지/소재', '산업재',        
     '채권', '기타'
 ]
 
@@ -396,7 +400,14 @@ def calculate_tax_fifo(df, target_year):
 
 st.sidebar.title("📈 StockWise")
 
-menu = st.sidebar.radio("메뉴 이동", ["1. 총 자산 확인", "2. 포트폴리오 분석", "3. 수익 분석", "4. 거래 기록 (입출금/매매)", "5. 세금 관리 (양도세)"])
+menu = st.sidebar.radio("메뉴 이동", [
+    "1. 총 자산 확인", 
+    "2. 포트폴리오 분석", 
+    "3. 수익 분석", 
+    "4. 거래 기록 (입출금/매매)", 
+    "5. 세금 관리 (양도세)",
+    "6. 투자 메모 (Post-it)"  # [NEW]
+])
 
 if 'last_menu' not in st.session_state:
     st.session_state['last_menu'] = menu
@@ -503,28 +514,23 @@ def color_negative_red(val):
 if menu == "1. 총 자산 확인":
     st.title("💰 총 자산 현황")
     
-    # [NEW] 어제 대비 변동액 계산
-    # 과거 데이터 로드 (캐싱되어 있음)
     daily_df = calculate_historical_assets(df)
     
     diff_val = 0
     yesterday_asset = 0
     
     if not daily_df.empty:
-        # 어제 날짜 계산 (오늘 - 1일)
         yesterday = datetime.now().date() - timedelta(days=1)
         yesterday_ts = pd.Timestamp(yesterday)
         
-        # 어제 데이터가 인덱스에 있는지 확인
         if yesterday_ts in daily_df.index:
             yesterday_asset = daily_df.loc[yesterday_ts]['Total_Asset_KRW']
         else:
-            # 어제 데이터가 없으면(휴일 등), 가장 최근의 과거 데이터 찾기
             past_data = daily_df[daily_df.index < pd.Timestamp(datetime.now().date())]
             if not past_data.empty:
                 yesterday_asset = past_data.iloc[-1]['Total_Asset_KRW']
             else:
-                yesterday_asset = current_total_asset_krw # 비교 대상 없음
+                yesterday_asset = current_total_asset_krw 
         
         diff_val = current_total_asset_krw - yesterday_asset
     
@@ -559,10 +565,10 @@ if menu == "1. 총 자산 확인":
             "보유수량": qty,
             "평단가($)": avg_price_usd,
             "현재가($)": curr_price_usd,
-            "매수금액(₩)": invested_krw,     
-            "평가금액(₩)": eval_value_krw,   
-            "주가수익(₩)": stock_gain_krw,   
-            "총손익(₩)": total_gain_krw,     
+            "매수금액(₩)": invested_krw,      
+            "평가금액(₩)": eval_value_krw,    
+            "주가수익(₩)": stock_gain_krw,    
+            "총손익(₩)": total_gain_krw,      
             "수익률(%)": roi_percent
         })
         if total_tickers > 0:
@@ -580,7 +586,6 @@ if menu == "1. 총 자산 확인":
     total_roi_krw = current_total_asset_krw - net_invest_krw
     total_roi_percent = (total_roi_krw / net_invest_krw * 100) if net_invest_krw != 0 else 0
 
-    # [수정] 메트릭에 delta 추가하여 어제 대비 변동 표시
     st.markdown(f"### 🏦 총 자산: {current_total_asset_krw:,.0f} 원")
     st.caption(f"전일 대비: {diff_val:+,.0f} 원 ({ (diff_val/yesterday_asset*100) if yesterday_asset>0 else 0 :+.2f}%)")
     
@@ -795,7 +800,6 @@ elif menu == "2. 포트폴리오 분석":
         
         sector_stats = pf_df.groupby('Sector')[['Invested_KRW', 'Value_KRW']].sum().reset_index()
         sector_stats['Profit_KRW'] = sector_stats['Value_KRW'] - sector_stats['Invested_KRW']
-        # [수정] 한글 컬럼명 적용
         sector_stats['수익금(만원)'] = sector_stats['Profit_KRW'] / 10000
         
         sector_stats['ROI'] = (sector_stats['Profit_KRW'] / sector_stats['Invested_KRW'] * 100).fillna(0)
@@ -836,7 +840,6 @@ elif menu == "2. 포트폴리오 분석":
                 st.plotly_chart(fig_roi, use_container_width=True)
             
             with tab2:
-                # [수정] y축 한글 컬럼명 사용
                 fig_profit = px.bar(sector_stats, x='Sector', y='수익금(만원)', color='Sector',
                                     text_auto=',.0f',
                                     title="섹터별 수익금 (단위: 만원)",
@@ -850,7 +853,6 @@ elif menu == "2. 포트폴리오 분석":
         
         group_stats = pf_df.groupby('Group')[['Invested_KRW', 'Value_KRW']].sum().reset_index()
         group_stats['Profit_KRW'] = group_stats['Value_KRW'] - group_stats['Invested_KRW']
-        # [수정] 한글 컬럼명 적용
         group_stats['수익금(만원)'] = group_stats['Profit_KRW'] / 10000
         
         group_stats['ROI'] = (group_stats['Profit_KRW'] / group_stats['Invested_KRW'] * 100).fillna(0)
@@ -891,7 +893,6 @@ elif menu == "2. 포트폴리오 분석":
                 st.plotly_chart(fig_roi_g, use_container_width=True)
             
             with tab2_g:
-                # [수정] y축 한글 컬럼명 사용
                 fig_profit_g = px.bar(group_stats, x='Group', y='수익금(만원)', color='Group',
                                     text_auto=',.0f',
                                     title="그룹별 수익금 (단위: 만원)",
@@ -922,7 +923,6 @@ elif menu == "3. 수익 분석":
             
             plot_df = daily_df.copy()
 
-            # 기간 필터링
             if period_option == "올해 (YTD)":
                 start_of_year = datetime(datetime.now().year, 1, 1)
                 plot_df = daily_df[daily_df.index >= pd.Timestamp(start_of_year)].copy()
@@ -939,71 +939,37 @@ elif menu == "3. 수익 분석":
                 custom_start_ts = pd.Timestamp(custom_start)
                 plot_df = daily_df[daily_df.index >= custom_start_ts].copy()
 
-            # --------------------------------------------------------------------------------
-            # [수정된 부분] 리베이스(Rebase) 로직: 시작일의 '내 자산 평가액'을 기준으로 통일
-            # --------------------------------------------------------------------------------
             if not plot_df.empty:
-                # 1. 기준점 잡기 (선택한 기간의 첫 날 데이터)
+                # [개선된 로직] 기준점(시작일)에 맞춰 그래프 Rebase
                 start_my_asset = plot_df['Total_Asset_KRW_10k'].iloc[0]
                 start_sp500_sim = plot_df['SP500_Sim_Asset_KRW_10k'].iloc[0]
                 start_principal = plot_df['Invested_Principal_10k'].iloc[0]
 
-                # 2. 내 자산 (실제 데이터 그대로 사용)
+                # 1. 내 자산 (실제 데이터)
                 plot_df['Rebased_My_Asset'] = plot_df['Total_Asset_KRW_10k']
 
-                # 3. S&P 500 (비율 조정)
-                # 시작일의 S&P500 시뮬레이션 금액과 내 자산 금액의 비율을 계산하여 전체 기간에 적용
-                # 의미: "이 기간 시작일에 내 자산만큼의 돈을 S&P500에 넣었다면?"
+                # 2. S&P 500 (비율 조정: 시작점에서 내 자산과 동일하게 출발)
                 if start_sp500_sim != 0:
                     sp500_ratio = start_my_asset / start_sp500_sim
                     plot_df['Rebased_SP500'] = plot_df['SP500_Sim_Asset_KRW_10k'] * sp500_ratio
                 else:
                     plot_df['Rebased_SP500'] = plot_df['SP500_Sim_Asset_KRW_10k']
 
-                # 4. 투자 원금 (차액 보정)
-                # 시작일의 내 자산 금액에서 출발하되, 이후의 '추가 입출금'만 반영
-                # 공식: (현재 원금 - 시작일 원금) + 시작일 내 자산
+                # 3. 투자 원금 (차액 보정: 시작점에서 내 자산과 동일하게 출발하고 입출금만 반영)
                 plot_df['Rebased_Principal'] = (plot_df['Invested_Principal_10k'] - start_principal) + start_my_asset
 
             else:
-                # 데이터가 없을 경우 초기화
                 plot_df['Rebased_My_Asset'] = 0
                 plot_df['Rebased_SP500'] = 0
                 plot_df['Rebased_Principal'] = 0
 
-            # 그래프 그리기
             fig_bm = go.Figure()
-            
-            # 내 자산 라인
-            fig_bm.add_trace(go.Scatter(
-                x=plot_df.index, 
-                y=plot_df['Rebased_My_Asset'], 
-                mode='lines', 
-                name='내 총 자산 (실제)', 
-                line=dict(color='#d62728', width=2)
-            ))
-            
-            # S&P 500 라인
-            fig_bm.add_trace(go.Scatter(
-                x=plot_df.index, 
-                y=plot_df['Rebased_SP500'], 
-                mode='lines', 
-                name='S&P 500 투자 가정', 
-                line=dict(color='#1f77b4', width=2)
-            ))
-            
-            # 원금(현금) 라인
-            fig_bm.add_trace(go.Scatter(
-                x=plot_df.index, 
-                y=plot_df['Rebased_Principal'], 
-                mode='lines', 
-                name='현금 보유 가정 (입출금 반영)', 
-                line=dict(color='gray', dash='dash', width=1)
-            ))
+            fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_My_Asset'], mode='lines', name='내 총 자산 (실제)', line=dict(color='#d62728', width=2)))
+            fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_SP500'], mode='lines', name='S&P 500 투자 가정', line=dict(color='#1f77b4', width=2)))
+            fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_Principal'], mode='lines', name='현금 보유 가정 (입출금 반영)', line=dict(color='gray', dash='dash', width=1)))
 
             fig_bm.update_layout(
-                xaxis_title="날짜", 
-                yaxis_title="평가금액 (단위: 만원)",
+                xaxis_title="날짜", yaxis_title="평가금액 (단위: 만원)",
                 hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
@@ -1290,4 +1256,80 @@ elif menu == "5. 세금 관리 (양도세)":
         else:
             st.write("해당 연도의 매도 내역이 없습니다.")
 
+elif menu == "6. 투자 메모 (Post-it)":
+    st.title("🗒️ 투자 메모 (Idea Note)")
+    st.caption("투자 원칙, 매수 아이디어, 반성할 점 등을 포스트잇처럼 기록하세요.")
 
+    # [데이터 로드]
+    memos_df = load_data_from_sheet('memos')
+
+    # --- 메모 작성 폼 ---
+    with st.expander("✍️ 새 메모 작성하기", expanded=False):
+        with st.form("memo_form"):
+            col1, col2 = st.columns([3, 1])
+            input_title = col1.text_input("제목", placeholder="예: 테슬라 매수 이유")
+            input_color = col2.selectbox("색상 선택", ["노랑 (Yellow)", "분홍 (Pink)", "파랑 (Blue)", "초록 (Green)"])
+            
+            input_content = st.text_area("내용", height=150, placeholder="자유롭게 내용을 작성하세요...")
+            
+            submitted = st.form_submit_button("메모 붙이기")
+            
+            if submitted:
+                if not input_title or not input_content:
+                    st.error("제목과 내용을 모두 입력해주세요.")
+                else:
+                    # 색상 코드 매핑
+                    color_map = {
+                        "노랑 (Yellow)": "#FFF475",
+                        "분홍 (Pink)": "#F28B82",
+                        "파랑 (Blue)": "#A7FFEB",
+                        "초록 (Green)": "#CCFF90"
+                    }
+                    
+                    new_memo = {
+                        'Date': datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        'Title': input_title,
+                        'Content': input_content,
+                        'Color': color_map[input_color]
+                    }
+                    
+                    memos_df = pd.concat([memos_df, pd.DataFrame([new_memo])], ignore_index=True)
+                    save_data_to_sheet(memos_df, 'memos')
+                    st.success("메모가 저장되었습니다!")
+                    st.rerun()
+
+    st.divider()
+
+    # --- 메모 보여주기 (Post-it 스타일) ---
+    if not memos_df.empty:
+        # 최신순 정렬 (선택 사항)
+        memos_df = memos_df.sort_values(by='Date', ascending=False).reset_index(drop=True)
+        
+        # 3열 그리드로 배치
+        cols = st.columns(3)
+        
+        for idx, row in memos_df.iterrows():
+            with cols[idx % 3]:
+                # 포스트잇 스타일 CSS 적용
+                st.markdown(f"""
+                <div style="
+                    background-color: {row['Color']};
+                    padding: 15px;
+                    border-radius: 5px;
+                    margin-bottom: 10px;
+                    box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+                    color: black;
+                ">
+                    <small style="color: #555;">📅 {row['Date']}</small>
+                    <h4 style="margin-top: 5px; margin-bottom: 10px; border-bottom: 1px solid rgba(0,0,0,0.1); padding-bottom:5px;">{row['Title']}</h4>
+                    <div style="white-space: pre-wrap; font-family: sans-serif; font-size: 14px; line-height: 1.5;">{row['Content']}</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # 삭제 버튼 (각 포스트잇 아래 배치)
+                if st.button("🗑️ 삭제", key=f"del_memo_{idx}"):
+                    memos_df = memos_df.drop(index=idx)
+                    save_data_to_sheet(memos_df, 'memos')
+                    st.rerun()
+    else:
+        st.info("작성된 메모가 없습니다. 위의 '새 메모 작성하기'를 눌러 첫 메모를 남겨보세요!")
