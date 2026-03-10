@@ -701,7 +701,8 @@ elif menu == "2. 포트폴리오 분석":
 
         pf_df.sort_values(by=['Group_Order', 'Sector_Order', 'Value_USD'], ascending=[True, True, False], inplace=True)
         
-        col1, col2 = st.columns(2)
+        # [모바일 최적화] 좌우 컬럼(Columns) 대신 탭(Tabs)을 사용하여 모바일 화면 겹침 방지
+        tab_pie1, tab_pie2 = st.tabs(["📊 주식 및 그룹별 비중", "📊 섹터별 비중"])
         
         def prepare_pie_data(df, group_col, value_col, threshold=0.01):
             total = df[value_col].sum()
@@ -739,7 +740,7 @@ elif menu == "2. 포트폴리오 분석":
             
             return main_df
 
-        with col1:
+        with tab_pie1:
             st.subheader("1. 주식별 비중")
             stock_pie_df = prepare_pie_data(pf_df, 'Ticker', 'Value_USD', threshold=0.01)
             
@@ -756,10 +757,11 @@ elif menu == "2. 포트폴리오 분석":
                 texttemplate='%{label}<br>%{percent:.0%}',
                 hovertemplate='<b>%{label}</b><br>비중: %{percent}<br>평가금: $%{value:,.2f}%{customdata[0]}<extra></extra>'
             )
-            fig1.update_layout(uniformtext_minsize=12, uniformtext_mode='hide')
+            # [모바일 최적화] 범례(Legend)를 가로(아래쪽)로 배치하여 차트 크기 극대화
+            fig1.update_layout(uniformtext_minsize=12, uniformtext_mode='hide', legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
             st.plotly_chart(fig1, use_container_width=True)
             
-            st.subheader("3. 그룹별 비중")
+            st.subheader("2. 그룹별 비중")
             group_agg = pf_df.groupby(['Group', 'Group_Order'], as_index=False)['Value_USD'].sum()
             group_agg.sort_values(by='Group_Order', inplace=True)
             
@@ -778,11 +780,11 @@ elif menu == "2. 포트폴리오 분석":
                 texttemplate='%{label}<br>%{percent:.0%}',
                 hovertemplate='<b>%{label}</b><br>비중: %{percent}<br>평가금: $%{value:,.2f}%{customdata[0]}<extra></extra>'
             )
-            fig3.update_layout(uniformtext_minsize=12, uniformtext_mode='hide')
+            fig3.update_layout(uniformtext_minsize=12, uniformtext_mode='hide', legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
             st.plotly_chart(fig3, use_container_width=True)
 
-        with col2:
-            st.subheader("2. 섹터별 비중")
+        with tab_pie2:
+            st.subheader("3. 섹터별 비중")
             sector_agg = pf_df.groupby(['Group', 'Group_Order', 'Sector', 'Sector_Order'], as_index=False)['Value_USD'].sum()
             sector_agg.sort_values(by=['Group_Order', 'Sector_Order'], inplace=True)
             
@@ -802,7 +804,7 @@ elif menu == "2. 포트폴리오 분석":
                 texttemplate='%{label}<br>%{percent:.0%}',
                 hovertemplate='<b>%{label}</b><br>비중: %{percent}<br>평가금: $%{value:,.2f}%{customdata[0]}<extra></extra>'
             )
-            fig2.update_layout(uniformtext_minsize=12, uniformtext_mode='hide')
+            fig2.update_layout(uniformtext_minsize=12, uniformtext_mode='hide', legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
             st.plotly_chart(fig2, use_container_width=True)
             
         st.markdown("---")
@@ -815,10 +817,10 @@ elif menu == "2. 포트폴리오 분석":
         sector_stats['ROI'] = (sector_stats['Profit_KRW'] / sector_stats['Invested_KRW'] * 100).fillna(0)
         sector_stats = sector_stats.sort_values(by='ROI', ascending=False)
         
-        col_tbl, col_chart = st.columns([1, 1])
+        # [모바일 최적화] 중첩된 표와 차트를 1단 탭으로 분리하여 쾌적하게 표시
+        tab_sec_tbl, tab_sec_roi, tab_sec_profit = st.tabs(["📋 표로 보기", "📊 수익률 차트", "💰 수익금 차트"])
         
-        with col_tbl:
-            st.caption("섹터별 상세 수익표")
+        with tab_sec_tbl:
             st.dataframe(
                 sector_stats.style.format({
                     "Invested_KRW": "{:,.0f}",
@@ -837,26 +839,23 @@ elif menu == "2. 포트폴리오 분석":
                 }
             )
 
-        with col_chart:
-            tab1, tab2 = st.tabs(["📊 수익률 (%)", "💰 수익금 (만원)"])
-            
-            with tab1:
-                fig_roi = px.bar(sector_stats, x='Sector', y='ROI', color='Sector', 
-                                 text_auto='.2f',
-                                 title="섹터별 수익률 (%)",
-                                 color_discrete_map=SECTOR_COLOR_MAP,
-                                 labels={'Sector': '섹터', 'ROI': '수익률(%)'}) 
-                fig_roi.update_layout(showlegend=False, yaxis_title="수익률 (%)")
-                st.plotly_chart(fig_roi, use_container_width=True)
-            
-            with tab2:
-                fig_profit = px.bar(sector_stats, x='Sector', y='수익금(만원)', color='Sector',
-                                    text_auto=',.0f',
-                                    title="섹터별 수익금 (단위: 만원)",
-                                    color_discrete_map=SECTOR_COLOR_MAP,
-                                    labels={'Sector': '섹터', '수익금(만원)': '수익금(만원)'}) 
-                fig_profit.update_layout(showlegend=False, yaxis_title="수익금 (만원)")
-                st.plotly_chart(fig_profit, use_container_width=True)
+        with tab_sec_roi:
+            fig_roi = px.bar(sector_stats, x='Sector', y='ROI', color='Sector', 
+                             text_auto='.2f',
+                             title="섹터별 수익률 (%)",
+                             color_discrete_map=SECTOR_COLOR_MAP,
+                             labels={'Sector': '섹터', 'ROI': '수익률(%)'}) 
+            fig_roi.update_layout(showlegend=False, yaxis_title="수익률 (%)")
+            st.plotly_chart(fig_roi, use_container_width=True)
+        
+        with tab_sec_profit:
+            fig_profit = px.bar(sector_stats, x='Sector', y='수익금(만원)', color='Sector',
+                                text_auto=',.0f',
+                                title="섹터별 수익금 (단위: 만원)",
+                                color_discrete_map=SECTOR_COLOR_MAP,
+                                labels={'Sector': '섹터', '수익금(만원)': '수익금(만원)'}) 
+            fig_profit.update_layout(showlegend=False, yaxis_title="수익금 (만원)")
+            st.plotly_chart(fig_profit, use_container_width=True)
 
         st.markdown("---")
         st.subheader("5. 그룹별 수익 현황")
@@ -868,10 +867,10 @@ elif menu == "2. 포트폴리오 분석":
         group_stats['ROI'] = (group_stats['Profit_KRW'] / group_stats['Invested_KRW'] * 100).fillna(0)
         group_stats = group_stats.sort_values(by='ROI', ascending=False)
         
-        col_tbl_g, col_chart_g = st.columns([1, 1])
+        # [모바일 최적화] 중첩된 표와 차트를 1단 탭으로 분리하여 쾌적하게 표시
+        tab_grp_tbl, tab_grp_roi, tab_grp_profit = st.tabs(["📋 표로 보기", "📊 수익률 차트", "💰 수익금 차트"])
         
-        with col_tbl_g:
-            st.caption("그룹별 상세 수익표")
+        with tab_grp_tbl:
             st.dataframe(
                 group_stats.style.format({
                     "Invested_KRW": "{:,.0f}",
@@ -890,26 +889,23 @@ elif menu == "2. 포트폴리오 분석":
                 }
             )
             
-        with col_chart_g:
-            tab1_g, tab2_g = st.tabs(["📊 수익률 (%)", "💰 수익금 (만원)"])
+        with tab_grp_roi:
+            fig_roi_g = px.bar(group_stats, x='Group', y='ROI', color='Group', 
+                             text_auto='.2f',
+                             title="그룹별 수익률 (%)",
+                             color_discrete_map=GROUP_COLOR_MAP,
+                             labels={'Group': '그룹', 'ROI': '수익률(%)'}) 
+            fig_roi_g.update_layout(showlegend=False, yaxis_title="수익률 (%)")
+            st.plotly_chart(fig_roi_g, use_container_width=True)
             
-            with tab1_g:
-                fig_roi_g = px.bar(group_stats, x='Group', y='ROI', color='Group', 
-                                 text_auto='.2f',
-                                 title="그룹별 수익률 (%)",
-                                 color_discrete_map=GROUP_COLOR_MAP,
-                                 labels={'Group': '그룹', 'ROI': '수익률(%)'}) 
-                fig_roi_g.update_layout(showlegend=False, yaxis_title="수익률 (%)")
-                st.plotly_chart(fig_roi_g, use_container_width=True)
-            
-            with tab2_g:
-                fig_profit_g = px.bar(group_stats, x='Group', y='수익금(만원)', color='Group',
-                                    text_auto=',.0f',
-                                    title="그룹별 수익금 (단위: 만원)",
-                                    color_discrete_map=GROUP_COLOR_MAP,
-                                    labels={'Group': '그룹', '수익금(만원)': '수익금(만원)'}) 
-                fig_profit_g.update_layout(showlegend=False, yaxis_title="수익금 (만원)")
-                st.plotly_chart(fig_profit_g, use_container_width=True)
+        with tab_grp_profit:
+            fig_profit_g = px.bar(group_stats, x='Group', y='수익금(만원)', color='Group',
+                                text_auto=',.0f',
+                                title="그룹별 수익금 (단위: 만원)",
+                                color_discrete_map=GROUP_COLOR_MAP,
+                                labels={'Group': '그룹', '수익금(만원)': '수익금(만원)'}) 
+            fig_profit_g.update_layout(showlegend=False, yaxis_title="수익금 (만원)")
+            st.plotly_chart(fig_profit_g, use_container_width=True)
 
         # -------------------------------------------------------------
         # [NEW] 🎯 6. 목표 비중 설정 및 리밸런싱
