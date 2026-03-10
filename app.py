@@ -90,7 +90,13 @@ def load_data_from_sheet(sheet_name):
 def save_data_to_sheet(data, sheet_name):
     try:
         client = init_connection()
-        sheet = client.open_by_url(st.secrets["sheet_url"]).worksheet(sheet_name)
+        spreadsheet = client.open_by_url(st.secrets["sheet_url"])
+        
+        # 탭이 없으면 자동으로 생성하는 로직 추가
+        try:
+            sheet = spreadsheet.worksheet(sheet_name)
+        except:
+            sheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=20)
         
         sheet.clear() 
         
@@ -953,10 +959,15 @@ elif menu == "2. 포트폴리오 분석":
             action = "-"
             if curr_price > 0:
                 shares = diff_usd / curr_price
-                if shares >= 1.0:
-                    action = f"🛒 +{int(shares):,}주 매수"
-                elif shares <= -1.0:
-                    action = f"💰 {-int(shares):,}주 매도"
+                ratio_diff = target_ratio - curr_ratio
+                
+                # 1주 이상 차이 나거나, 비중이 5% 이상 차이날 때 액션 표시
+                if shares >= 1.0 or ratio_diff >= 5.0:
+                    shares_disp = f"{int(shares):,}" if shares >= 1.0 else f"{shares:.2f}"
+                    action = f"🛒 +{shares_disp}주 매수"
+                elif shares <= -1.0 or ratio_diff <= -5.0:
+                    shares_disp = f"{-int(shares):,}" if shares <= -1.0 else f"{-shares:.2f}"
+                    action = f"💰 -{shares_disp}주 매도"
 
             rebal_list.append({
                 'Ticker': ticker,
@@ -1004,7 +1015,7 @@ elif menu == "2. 포트폴리오 분석":
                 "Current_Ratio": st.column_config.NumberColumn("현재 비중(%)", format="%.1f%%"),
                 "Target_Ratio": st.column_config.NumberColumn("🎯 목표 비중(%) ✏️", format="%.1f", min_value=0.0, step=0.1),
                 "Diff_USD": st.column_config.NumberColumn("조정 필요 금액($)", format="$%.2f"),
-                "Action": st.column_config.TextColumn("리밸런싱 액션 (1주 이상)", width="medium")
+                "Action": st.column_config.TextColumn("리밸런싱 액션 (1주 또는 5% 이상)", width="medium")
             },
             use_container_width=True,
             key="rebalance_editor",
