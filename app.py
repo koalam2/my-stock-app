@@ -701,8 +701,8 @@ elif menu == "2. 포트폴리오 분석":
 
         pf_df.sort_values(by=['Group_Order', 'Sector_Order', 'Value_USD'], ascending=[True, True, False], inplace=True)
         
-        # [모바일 최적화] 좌우 컬럼(Columns) 대신 탭(Tabs)을 사용하여 모바일 화면 겹침 방지
-        tab_pie1, tab_pie2 = st.tabs(["📊 주식 및 그룹별 비중", "📊 섹터별 비중"])
+        # [수정됨] 탭을 3개로 완전히 분리
+        tab_pie_stock, tab_pie_group, tab_pie_sector = st.tabs(["📊 주식별 비중", "📊 그룹별 비중", "📊 섹터별 비중"])
         
         def prepare_pie_data(df, group_col, value_col, threshold=0.01):
             total = df[value_col].sum()
@@ -740,7 +740,7 @@ elif menu == "2. 포트폴리오 분석":
             
             return main_df
 
-        with tab_pie1:
+        with tab_pie_stock:
             st.subheader("1. 주식별 비중")
             stock_pie_df = prepare_pie_data(pf_df, 'Ticker', 'Value_USD', threshold=0.01)
             
@@ -757,10 +757,11 @@ elif menu == "2. 포트폴리오 분석":
                 texttemplate='%{label}<br>%{percent:.0%}',
                 hovertemplate='<b>%{label}</b><br>비중: %{percent}<br>평가금: $%{value:,.2f}%{customdata[0]}<extra></extra>'
             )
-            # [모바일 최적화] 범례(Legend)를 가로(아래쪽)로 배치하여 차트 크기 극대화
+            # 모바일 최적화: 범례 가로 배치
             fig1.update_layout(uniformtext_minsize=12, uniformtext_mode='hide', legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
             st.plotly_chart(fig1, use_container_width=True)
             
+        with tab_pie_group:
             st.subheader("2. 그룹별 비중")
             group_agg = pf_df.groupby(['Group', 'Group_Order'], as_index=False)['Value_USD'].sum()
             group_agg.sort_values(by='Group_Order', inplace=True)
@@ -780,10 +781,11 @@ elif menu == "2. 포트폴리오 분석":
                 texttemplate='%{label}<br>%{percent:.0%}',
                 hovertemplate='<b>%{label}</b><br>비중: %{percent}<br>평가금: $%{value:,.2f}%{customdata[0]}<extra></extra>'
             )
+            # 모바일 최적화: 범례 가로 배치
             fig3.update_layout(uniformtext_minsize=12, uniformtext_mode='hide', legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
             st.plotly_chart(fig3, use_container_width=True)
 
-        with tab_pie2:
+        with tab_pie_sector:
             st.subheader("3. 섹터별 비중")
             sector_agg = pf_df.groupby(['Group', 'Group_Order', 'Sector', 'Sector_Order'], as_index=False)['Value_USD'].sum()
             sector_agg.sort_values(by=['Group_Order', 'Sector_Order'], inplace=True)
@@ -804,6 +806,7 @@ elif menu == "2. 포트폴리오 분석":
                 texttemplate='%{label}<br>%{percent:.0%}',
                 hovertemplate='<b>%{label}</b><br>비중: %{percent}<br>평가금: $%{value:,.2f}%{customdata[0]}<extra></extra>'
             )
+            # 모바일 최적화: 범례 가로 배치
             fig2.update_layout(uniformtext_minsize=12, uniformtext_mode='hide', legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
             st.plotly_chart(fig2, use_container_width=True)
             
