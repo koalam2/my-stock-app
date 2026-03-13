@@ -56,7 +56,7 @@ def load_data_from_sheet(sheet_name):
                 return pd.DataFrame(columns=['Ticker', 'Sector'])
             elif sheet_name == 'memos':  
                 return pd.DataFrame(columns=['Date', 'Title', 'Content', 'Color'])
-            elif sheet_name == 'targets':  # [NEW] 목표 비중 시트
+            elif sheet_name == 'targets':  # 목표 비중 시트
                 return pd.DataFrame(columns=['Ticker', 'Target_Ratio'])
             elif sheet_name == 'config':
                 return {} 
@@ -207,7 +207,10 @@ def calculate_historical_assets(transactions_df):
     
     try:
         usdkrw = fdr.DataReader('USD/KRW', start_date, end_date)['Close']
+        usdkrw = usdkrw[~usdkrw.index.duplicated(keep='last')] # 중복 날짜 제거
+        
         spy_data = fdr.DataReader('SPY', start_date - timedelta(days=7), end_date)['Close']
+        spy_data = spy_data[~spy_data.index.duplicated(keep='last')] # 중복 날짜 제거
     except:
         return pd.DataFrame()
 
@@ -222,6 +225,7 @@ def calculate_historical_assets(transactions_df):
     for t in tickers:
         try:
             df = fdr.DataReader(t, start_date - timedelta(days=7), end_date)
+            df = df[~df.index.duplicated(keep='last')] # 중복 날짜 제거
             price_data[t] = df['Close']
         except:
             price_data[t] = pd.Series(0, index=date_range) 
@@ -701,7 +705,7 @@ elif menu == "2. 포트폴리오 분석":
 
         pf_df.sort_values(by=['Group_Order', 'Sector_Order', 'Value_USD'], ascending=[True, True, False], inplace=True)
         
-        # [수정됨] 탭을 3개로 완전히 분리
+        # [모바일 최적화] 탭을 3개로 완전히 분리
         tab_pie_stock, tab_pie_group, tab_pie_sector = st.tabs(["📊 주식별 비중", "📊 그룹별 비중", "📊 섹터별 비중"])
         
         def prepare_pie_data(df, group_col, value_col, threshold=0.01):
