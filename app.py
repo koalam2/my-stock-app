@@ -6,7 +6,6 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import os
 import json
 
 # ---------------------------------------------------------
@@ -23,7 +22,6 @@ def init_connection():
         "https://www.googleapis.com/auth/drive"
     ]
     
-    # Secrets 설정 확인
     if "sheet_url" not in st.secrets:
         st.error("🚨 `sheet_url` 설정이 없습니다.")
         st.stop()
@@ -49,14 +47,13 @@ def load_data_from_sheet(sheet_name):
         data = sheet.get_all_records()
         
         if not data:
-            # 시트별 빈 데이터프레임 구조 정의
             if sheet_name == 'transactions':
                 return pd.DataFrame(columns=['Date', 'Type', 'Ticker', 'Sector', 'Amount_USD', 'Quantity', 'Exchange_Rate', 'Total_KRW'])
             elif sheet_name == 'favorites':
                 return pd.DataFrame(columns=['Ticker', 'Sector'])
             elif sheet_name == 'memos':  
                 return pd.DataFrame(columns=['Date', 'Title', 'Content', 'Color'])
-            elif sheet_name == 'targets':  # 목표 비중 시트
+            elif sheet_name == 'targets':  
                 return pd.DataFrame(columns=['Ticker', 'Target_Ratio'])
             elif sheet_name == 'config':
                 return {} 
@@ -74,7 +71,6 @@ def load_data_from_sheet(sheet_name):
                 
         return df
     except Exception as e:
-        # 에러 발생 시 빈 객체 반환
         if sheet_name == 'transactions':
             return pd.DataFrame(columns=['Date', 'Type', 'Ticker', 'Sector', 'Amount_USD', 'Quantity', 'Exchange_Rate', 'Total_KRW'])
         elif sheet_name == 'favorites':
@@ -92,7 +88,6 @@ def save_data_to_sheet(data, sheet_name):
         client = init_connection()
         spreadsheet = client.open_by_url(st.secrets["sheet_url"])
         
-        # 탭이 없으면 자동으로 생성하는 로직 추가
         try:
             sheet = spreadsheet.worksheet(sheet_name)
         except:
@@ -207,10 +202,10 @@ def calculate_historical_assets(transactions_df):
     
     try:
         usdkrw = fdr.DataReader('USD/KRW', start_date, end_date)['Close']
-        usdkrw = usdkrw[~usdkrw.index.duplicated(keep='last')] # 중복 날짜 제거
+        usdkrw = usdkrw[~usdkrw.index.duplicated(keep='last')]
         
         spy_data = fdr.DataReader('SPY', start_date - timedelta(days=7), end_date)['Close']
-        spy_data = spy_data[~spy_data.index.duplicated(keep='last')] # 중복 날짜 제거
+        spy_data = spy_data[~spy_data.index.duplicated(keep='last')]
     except:
         return pd.DataFrame()
 
@@ -225,7 +220,7 @@ def calculate_historical_assets(transactions_df):
     for t in tickers:
         try:
             df = fdr.DataReader(t, start_date - timedelta(days=7), end_date)
-            df = df[~df.index.duplicated(keep='last')] # 중복 날짜 제거
+            df = df[~df.index.duplicated(keep='last')]
             price_data[t] = df['Close']
         except:
             price_data[t] = pd.Series(0, index=date_range) 
@@ -253,7 +248,6 @@ def calculate_historical_assets(transactions_df):
         if row['Type'] == '입금':
             daily_df.at[d, 'Cash_Change'] += amt_krw
             daily_df.at[d, 'Principal_Change'] += amt_krw
-            
             usd_amt = amt_krw / rate_then
             spy_qty = usd_amt / spy_price_then
             daily_df.at[d, 'SPY_Qty_Change'] += spy_qty
@@ -261,7 +255,6 @@ def calculate_historical_assets(transactions_df):
         elif row['Type'] == '출금':
             daily_df.at[d, 'Cash_Change'] -= amt_krw
             daily_df.at[d, 'Principal_Change'] -= amt_krw
-            
             usd_amt = amt_krw / rate_then
             spy_qty = usd_amt / spy_price_then
             daily_df.at[d, 'SPY_Qty_Change'] -= spy_qty
@@ -408,6 +401,14 @@ def calculate_tax_fifo(df, target_year):
     
     return realized_gains, total_fees
 
+def color_negative_red(val):
+    if val > 0:
+        return 'color: blue' 
+    elif val < 0:
+        return 'color: red' 
+    else:
+        return 'color: black'
+
 # ---------------------------------------------------------
 # 2. 전역 변수 계산 및 사이드바 설정
 # ---------------------------------------------------------
@@ -433,8 +434,11 @@ if st.session_state['last_menu'] != menu:
         if 'fav_selector' in st.session_state:
             del st.session_state['fav_selector']
 
-# [데이터 로드] 구글 시트 사용
+# [데이터 및 설정 로드] 구글 시트 사용
 df = load_data_from_sheet('transactions')
+app_config = load_config()
+saved_goal1 = int(app_config.get('goal1', 100000000))
+saved_goal2 = int(app_config.get('goal2', 1000000000))
 current_rate = get_exchange_rate()
 
 # [GLOBAL] 포트폴리오 및 현재 자산 계산
@@ -485,49 +489,41 @@ for ticker, data in portfolio.items():
 
 current_total_asset_krw = current_total_stock_val_krw + current_cash_krw
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🚀 자산 목표 달성률")
-
-# [설정 로드] 구글 시트 사용
-app_config = load_config()
-saved_goal1 = int(app_config.get('goal1', 100000000))
-saved_goal2 = int(app_config.get('goal2', 1000000000))
-
-with st.sidebar.expander("🎯 목표 금액 설정", expanded=False):
-    goal1_target = st.number_input("1차 목표 (원)", value=saved_goal1, step=10_000_000, format="%d")
-    goal2_target = st.number_input("2차 목표 (원)", value=saved_goal2, step=100_000_000, format="%d")
-    
-    if st.button("목표 저장"):
-        save_config(goal1_target, goal2_target)
-        st.success("목표 금액이 저장되었습니다!")
-        st.rerun()
-
-st.sidebar.caption(f"🥇 1차: {goal1_target:,.0f}원")
-prog1 = min(current_total_asset_krw / goal1_target, 1.0) if goal1_target > 0 else 0
-st.sidebar.progress(prog1)
-st.sidebar.caption(f"{prog1*100:.1f}% ({current_total_asset_krw:,.0f}원)")
-
-st.sidebar.caption(f"🥈 2차: {goal2_target:,.0f}원")
-prog2 = min(current_total_asset_krw / goal2_target, 1.0) if goal2_target > 0 else 0
-st.sidebar.progress(prog2)
-st.sidebar.caption(f"{prog2*100:.1f}% ({current_total_asset_krw:,.0f}원)")
-
 
 # ---------------------------------------------------------
 # 3. 화면별 로직 구현
 # ---------------------------------------------------------
 
-def color_negative_red(val):
-    if val > 0:
-        return 'color: blue' 
-    elif val < 0:
-        return 'color: red' 
-    else:
-        return 'color: black'
-
 if menu == "1. 총 자산 확인":
     st.title("💰 총 자산 현황")
     
+    # --- 자산 목표 설정 및 현황 (대시보드 상단 배치) ---
+    st.markdown("### 🚀 자산 목표 달성률")
+    col_g1, col_g2 = st.columns(2)
+    
+    prog1 = min(current_total_asset_krw / saved_goal1, 1.0) if saved_goal1 > 0 else 0
+    with col_g1:
+        st.caption(f"🥇 1차 목표: {saved_goal1:,.0f}원 (달성률: {prog1*100:.1f}%)")
+        st.progress(prog1)
+
+    prog2 = min(current_total_asset_krw / saved_goal2, 1.0) if saved_goal2 > 0 else 0
+    with col_g2:
+        st.caption(f"🥈 2차 목표: {saved_goal2:,.0f}원 (달성률: {prog2*100:.1f}%)")
+        st.progress(prog2)
+
+    with st.expander("🎯 목표 금액 수정", expanded=False):
+        c1, c2 = st.columns(2)
+        goal1_target = c1.number_input("1차 목표 (원)", value=saved_goal1, step=10_000_000, format="%d", key="g1_input")
+        goal2_target = c2.number_input("2차 목표 (원)", value=saved_goal2, step=100_000_000, format="%d", key="g2_input")
+        
+        if st.button("목표 저장"):
+            save_config(goal1_target, goal2_target)
+            st.success("목표 금액이 성공적으로 저장되었습니다!")
+            st.rerun()
+            
+    st.markdown("---")
+    
+    # --- 기존 총 자산 확인 로직 ---
     daily_df = calculate_historical_assets(df)
     
     diff_val = 0
@@ -550,10 +546,6 @@ if menu == "1. 총 자산 확인":
     
     total_stock_eval_usd = 0
     stock_details = []
-    
-    total_tickers = len(portfolio)
-    if total_tickers > 0:
-        progress_bar = st.progress(0)
     
     for i, (ticker, data) in enumerate(portfolio.items()):
         curr_price_usd = get_current_price(ticker)
@@ -585,11 +577,6 @@ if menu == "1. 총 자산 확인":
             "총손익(₩)": total_gain_krw,      
             "수익률(%)": roi_percent
         })
-        if total_tickers > 0:
-            progress_bar.progress((i + 1) / total_tickers)
-    
-    if total_tickers > 0:
-        progress_bar.empty()
     
     if stock_details:
         stock_details.sort(key=lambda x: x["평가금액(₩)"], reverse=True)
@@ -705,7 +692,6 @@ elif menu == "2. 포트폴리오 분석":
 
         pf_df.sort_values(by=['Group_Order', 'Sector_Order', 'Value_USD'], ascending=[True, True, False], inplace=True)
         
-        # [모바일 최적화] 탭을 3개로 완전히 분리
         tab_pie_stock, tab_pie_group, tab_pie_sector = st.tabs(["📊 주식별 비중", "📊 그룹별 비중", "📊 섹터별 비중"])
         
         def prepare_pie_data(df, group_col, value_col, threshold=0.01):
@@ -761,7 +747,6 @@ elif menu == "2. 포트폴리오 분석":
                 texttemplate='%{label}<br>%{percent:.0%}',
                 hovertemplate='<b>%{label}</b><br>비중: %{percent}<br>평가금: $%{value:,.2f}%{customdata[0]}<extra></extra>'
             )
-            # 모바일 최적화: 범례 가로 배치
             fig1.update_layout(uniformtext_minsize=12, uniformtext_mode='hide', legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
             st.plotly_chart(fig1, use_container_width=True)
             
@@ -785,7 +770,6 @@ elif menu == "2. 포트폴리오 분석":
                 texttemplate='%{label}<br>%{percent:.0%}',
                 hovertemplate='<b>%{label}</b><br>비중: %{percent}<br>평가금: $%{value:,.2f}%{customdata[0]}<extra></extra>'
             )
-            # 모바일 최적화: 범례 가로 배치
             fig3.update_layout(uniformtext_minsize=12, uniformtext_mode='hide', legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
             st.plotly_chart(fig3, use_container_width=True)
 
@@ -810,7 +794,6 @@ elif menu == "2. 포트폴리오 분석":
                 texttemplate='%{label}<br>%{percent:.0%}',
                 hovertemplate='<b>%{label}</b><br>비중: %{percent}<br>평가금: $%{value:,.2f}%{customdata[0]}<extra></extra>'
             )
-            # 모바일 최적화: 범례 가로 배치
             fig2.update_layout(uniformtext_minsize=12, uniformtext_mode='hide', legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5))
             st.plotly_chart(fig2, use_container_width=True)
             
@@ -824,7 +807,6 @@ elif menu == "2. 포트폴리오 분석":
         sector_stats['ROI'] = (sector_stats['Profit_KRW'] / sector_stats['Invested_KRW'] * 100).fillna(0)
         sector_stats = sector_stats.sort_values(by='ROI', ascending=False)
         
-        # [모바일 최적화] 중첩된 표와 차트를 1단 탭으로 분리하여 쾌적하게 표시
         tab_sec_tbl, tab_sec_roi, tab_sec_profit = st.tabs(["📋 표로 보기", "📊 수익률 차트", "💰 수익금 차트"])
         
         with tab_sec_tbl:
@@ -874,7 +856,6 @@ elif menu == "2. 포트폴리오 분석":
         group_stats['ROI'] = (group_stats['Profit_KRW'] / group_stats['Invested_KRW'] * 100).fillna(0)
         group_stats = group_stats.sort_values(by='ROI', ascending=False)
         
-        # [모바일 최적화] 중첩된 표와 차트를 1단 탭으로 분리하여 쾌적하게 표시
         tab_grp_tbl, tab_grp_roi, tab_grp_profit = st.tabs(["📋 표로 보기", "📊 수익률 차트", "💰 수익금 차트"])
         
         with tab_grp_tbl:
@@ -921,7 +902,6 @@ elif menu == "2. 포트폴리오 분석":
         st.subheader("🎯 6. 목표 비중 설정 및 리밸런싱")
         st.caption("각 종목의 **목표 비중(%)** 열을 수정하세요. 현재 자산과 비교하여 필요한 매수/매도 수량을 실시간으로 알려줍니다.")
 
-        # 1. Session State에 타겟 비율 초기화 (DB -> Session)
         if 'target_ratios' not in st.session_state:
             targets_df = load_data_from_sheet('targets')
             if not targets_df.empty:
@@ -929,10 +909,8 @@ elif menu == "2. 포트폴리오 분석":
             else:
                 st.session_state.target_ratios = {}
 
-        # 2. 에디터 렌더링 순서를 기억하기 위한 리스트
         st.session_state.rebal_tickers = list(portfolio.keys())
 
-        # 3. 데이터 변경 시 작동할 콜백 함수
         def update_target_ratio_callback():
             changes = st.session_state.rebalance_editor['edited_rows']
             for row_idx_str, col_changes in changes.items():
@@ -942,7 +920,6 @@ elif menu == "2. 포트폴리오 분석":
                     new_ratio = col_changes['Target_Ratio']
                     st.session_state.target_ratios[ticker] = new_ratio
 
-        # 4. 리밸런싱 데이터프레임 계산
         total_pf_value_usd = sum([get_current_price(t) * d['qty'] for t, d in portfolio.items()])
         
         rebal_list = []
@@ -953,7 +930,6 @@ elif menu == "2. 포트폴리오 분석":
             val_usd = curr_price * qty
             curr_ratio = (val_usd / total_pf_value_usd * 100) if total_pf_value_usd > 0 else 0
             
-            # session_state에 값이 있으면 가져오고, 없으면 현재 비율로 초기 세팅
             target_ratio = st.session_state.target_ratios.get(ticker, round(curr_ratio, 1))
             
             target_val_usd = total_pf_value_usd * (target_ratio / 100)
@@ -964,7 +940,6 @@ elif menu == "2. 포트폴리오 분석":
                 shares = diff_usd / curr_price
                 ratio_diff = target_ratio - curr_ratio
                 
-                # 1주 이상 차이 나거나, 비중이 5% 이상 차이날 때 액션 표시
                 if shares >= 1.0 or ratio_diff >= 5.0:
                     shares_disp = f"{int(shares):,}" if shares >= 1.0 else f"{shares:.2f}"
                     action = f"🛒 +{shares_disp}주 매수"
@@ -985,7 +960,6 @@ elif menu == "2. 포트폴리오 분석":
             
         rebal_df = pd.DataFrame(rebal_list)
         
-        # 5. UI 출력: 메시지 및 저장 버튼
         total_target_ratio = sum([r['Target_Ratio'] for r in rebal_list])
         
         col_msg, col_btn = st.columns([3, 1])
@@ -996,7 +970,6 @@ elif menu == "2. 포트폴리오 분석":
                 st.success(f"✅ 목표 비중 합계: **{total_target_ratio:.1f}%**")
                 
         with col_btn:
-            # 실시간 뷰어 역할은 에디터가 하고, 실제 DB 저장은 이 버튼으로 수행 (최적화)
             if st.button("💾 목표 비중 저장하기", use_container_width=True, type="primary"):
                 save_df = pd.DataFrame({
                     'Ticker': list(st.session_state.target_ratios.keys()),
@@ -1005,7 +978,6 @@ elif menu == "2. 포트폴리오 분석":
                 save_data_to_sheet(save_df, 'targets')
                 st.toast("목표 비중이 구글 시트에 안전하게 저장되었습니다!", icon="✅")
 
-        # 6. 실시간 데이터 에디터 렌더링
         st.data_editor(
             rebal_df,
             disabled=['Ticker', 'Price_USD', 'Quantity', 'Value_USD', 'Current_Ratio', 'Diff_USD', 'Action'],
@@ -1024,7 +996,6 @@ elif menu == "2. 포트폴리오 분석":
             key="rebalance_editor",
             on_change=update_target_ratio_callback
         )
-
 
 elif menu == "3. 수익 분석":
     st.title("📈 수익 분석")
@@ -1065,22 +1036,18 @@ elif menu == "3. 수익 분석":
                 plot_df = daily_df[daily_df.index >= custom_start_ts].copy()
 
             if not plot_df.empty:
-                # [개선된 로직] 기준점(시작일)에 맞춰 그래프 Rebase
                 start_my_asset = plot_df['Total_Asset_KRW_10k'].iloc[0]
                 start_sp500_sim = plot_df['SP500_Sim_Asset_KRW_10k'].iloc[0]
                 start_principal = plot_df['Invested_Principal_10k'].iloc[0]
 
-                # 1. 내 자산 (실제 데이터)
                 plot_df['Rebased_My_Asset'] = plot_df['Total_Asset_KRW_10k']
 
-                # 2. S&P 500 (비율 조정: 시작점에서 내 자산과 동일하게 출발)
                 if start_sp500_sim != 0:
                     sp500_ratio = start_my_asset / start_sp500_sim
                     plot_df['Rebased_SP500'] = plot_df['SP500_Sim_Asset_KRW_10k'] * sp500_ratio
                 else:
                     plot_df['Rebased_SP500'] = plot_df['SP500_Sim_Asset_KRW_10k']
 
-                # 3. 투자 원금 (차액 보정: 시작점에서 내 자산과 동일하게 출발하고 입출금만 반영)
                 plot_df['Rebased_Principal'] = (plot_df['Invested_Principal_10k'] - start_principal) + start_my_asset
 
             else:
@@ -1403,7 +1370,6 @@ elif menu == "6. 투자 메모 (Post-it)":
                 if not input_title or not input_content:
                     st.error("제목과 내용을 모두 입력해주세요.")
                 else:
-                    # 색상 코드 매핑
                     color_map = {
                         "노랑 (Yellow)": "#FFF475",
                         "분홍 (Pink)": "#F28B82",
@@ -1427,15 +1393,12 @@ elif menu == "6. 투자 메모 (Post-it)":
 
     # --- 메모 보여주기 (Post-it 스타일) ---
     if not memos_df.empty:
-        # 최신순 정렬 (선택 사항)
         memos_df = memos_df.sort_values(by='Date', ascending=False).reset_index(drop=True)
         
-        # 3열 그리드로 배치
         cols = st.columns(3)
         
         for idx, row in memos_df.iterrows():
             with cols[idx % 3]:
-                # 포스트잇 스타일 CSS 적용
                 st.markdown(f"""
                 <div style="
                     background-color: {row['Color']};
@@ -1451,7 +1414,6 @@ elif menu == "6. 투자 메모 (Post-it)":
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # 삭제 버튼 (각 포스트잇 아래 배치)
                 if st.button("🗑️ 삭제", key=f"del_memo_{idx}"):
                     memos_df = memos_df.drop(index=idx)
                     save_data_to_sheet(memos_df, 'memos')
