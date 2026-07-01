@@ -184,7 +184,7 @@ def get_sp500_data():
     return df
 
 @st.cache_data(ttl=3600)
-def calculate_historical_assets(transactions_df):
+def calculate_historical_assets(transactions_df, custom_ticker=None):
     if transactions_df.empty:
         return pd.DataFrame()
 
@@ -202,14 +202,30 @@ def calculate_historical_assets(transactions_df):
         
         spy_data = fdr.DataReader('SPY', start_date - timedelta(days=7), end_date)['Close']
         spy_data = spy_data[~spy_data.index.duplicated(keep='last')]
+        
+        qqq_data = fdr.DataReader('QQQ', start_date - timedelta(days=7), end_date)['Close']
+        qqq_data = qqq_data[~qqq_data.index.duplicated(keep='last')]
     except:
         return pd.DataFrame()
 
     daily_df['Exchange_Rate'] = usdkrw
     daily_df['SPY_Price'] = spy_data
+    daily_df['QQQ_Price'] = qqq_data
     
     daily_df['Exchange_Rate'] = daily_df['Exchange_Rate'].ffill().bfill()
     daily_df['SPY_Price'] = daily_df['SPY_Price'].ffill().bfill()
+    daily_df['QQQ_Price'] = daily_df['QQQ_Price'].ffill().bfill()
+
+    has_custom = False
+    if custom_ticker:
+        try:
+            custom_data = fdr.DataReader(custom_ticker, start_date - timedelta(days=7), end_date)['Close']
+            custom_data = custom_data[~custom_data.index.duplicated(keep='last')]
+            daily_df['Custom_Price'] = custom_data
+            daily_df['Custom_Price'] = daily_df['Custom_Price'].ffill().bfill()
+            has_custom = True
+        except:
+            pass
 
     tickers = transactions_df[transactions_df['Ticker'].notna() & (transactions_df['Ticker'] != 'CASH')]['Ticker'].unique()
     price_data = {}
@@ -226,6 +242,9 @@ def calculate_historical_assets(transactions_df):
     daily_df['Cash_Change'] = 0.0
     daily_df['Principal_Change'] = 0.0
     daily_df['SPY_Qty_Change'] = 0.0
+    daily_df['QQQ_Qty_Change'] = 0.0
+    if has_custom:
+        daily_df['Custom_Qty_Change'] = 0.0
     
     for t in tickers:
         daily_df[f'Qty_Change_{t}'] = 0.0
@@ -237,26 +256,37 @@ def calculate_historical_assets(transactions_df):
         amt_krw = row['Total_KRW']
         rate_then = daily_df.at[d, 'Exchange_Rate']
         spy_price_then = daily_df.at[d, 'SPY_Price']
+        qqq_price_then = daily_df.at[d, 'QQQ_Price']
+        custom_price_then = daily_df.at[d, 'Custom_Price'] if has_custom else 0
         
         if pd.isna(rate_then) or rate_then == 0: rate_then = 1300.0
         if pd.isna(spy_price_then) or spy_price_then == 0: spy_price_then = 400.0
+        if pd.isna(qqq_price_then) or qqq_price_then == 0: qqq_price_then = 400.0
+        if has_custom and (pd.isna(custom_price_then) or custom_price_then == 0): custom_price_then = 1.0
 
         if row['Type'] == '입금':
             daily_df.at[d, 'Cash_Change'] += amt_krw
             daily_df.at[d, 'Principal_Change'] += amt_krw
             usd_amt = amt_krw / rate_then
-            spy_qty = usd_amt / spy_price_then
-            daily_df.at[d, 'SPY_Qty_Change'] += spy_qty
+            daily_df.at[d, 'SPY_Qty_Change'] += usd_amt / spy_price_then
+            daily_df.at[d, 'QQQ_Qty_Change'] += usd_amt / qqq_price_then
+            if has_custom:
+                daily_df.at[d, 'Custom_Qty_Change'] += usd_amt / custom_price_then
+
         elif row['Type'] == '출금':
             daily_df.at[d, 'Cash_Change'] -= amt_krw
             daily_df.at[d, 'Principal_Change'] -= amt_krw
             usd_amt = amt_krw / rate_then
-            spy_qty = usd_amt / spy_price_then
-            daily_df.at[d, 'SPY_Qty_Change'] -= spy_qty
+            daily_df.at[d, 'SPY_Qty_Change'] -= usd_amt / spy_price_then
+            daily_df.at[d, 'QQQ_Qty_Change'] -= usd_amt / qqq_price_then
+            if has_custom:
+                daily_df.at[d, 'Custom_Qty_Change'] -= usd_amt / custom_price_then
+
         elif row['Type'] == '매수':
             daily_df.at[d, 'Cash_Change'] -= amt_krw
             if row['Ticker'] in tickers:
                 daily_df.at[d, f"Qty_Change_{row['Ticker']}"] += row['Quantity']
+
         elif row['Type'] == '매도':
             daily_df.at[d, 'Cash_Change'] += amt_krw
             if row['Ticker'] in tickers:
@@ -269,6 +299,9 @@ def calculate_historical_assets(transactions_df):
     daily_df['Cash_Balance'] = daily_df['Cash_Change'].cumsum()
     daily_df['Invested_Principal'] = daily_df['Principal_Change'].cumsum()
     daily_df['SPY_Sim_Qty'] = daily_df['SPY_Qty_Change'].cumsum()
+    daily_df['QQQ_Sim_Qty'] = daily_df['QQQ_Qty_Change'].cumsum()
+    if has_custom:
+        daily_df['Custom_Sim_Qty'] = daily_df['Custom_Qty_Change'].cumsum()
     
     for t in tickers:
         daily_df[f'Qty_{t}'] = daily_df[f'Qty_Change_{t}'].cumsum()
@@ -281,7 +314,11 @@ def calculate_historical_assets(transactions_df):
         
     daily_df['Total_Asset_KRW'] = daily_df['Stock_Eval_KRW'] + daily_df['Cash_Balance']
     daily_df['Profit_KRW'] = daily_df['Total_Asset_KRW'] - daily_df['Invested_Principal']
+    
     daily_df['SP500_Sim_Asset_KRW'] = daily_df['SPY_Sim_Qty'] * daily_df['SPY_Price'] * daily_df['Exchange_Rate']
+    daily_df['NASDAQ100_Sim_Asset_KRW'] = daily_df['QQQ_Sim_Qty'] * daily_df['QQQ_Price'] * daily_df['Exchange_Rate']
+    if has_custom:
+        daily_df['Custom_Sim_Asset_KRW'] = daily_df['Custom_Sim_Qty'] * daily_df['Custom_Price'] * daily_df['Exchange_Rate']
 
     return daily_df
 
@@ -465,7 +502,6 @@ def color_negative_red(val):
 if menu == "1. 총 자산 확인":
     st.title("💰 총 자산 현황 및 목표")
     
-    # [수정됨] 대시보드 상단으로 목표 이동
     app_config = load_config()
     saved_goal1 = int(app_config.get('goal1', 100000000))
     saved_goal2 = int(app_config.get('goal2', 1000000000))
@@ -779,9 +815,7 @@ elif menu == "2. 포트폴리오 분석":
             fig2.update_layout(uniformtext_minsize=12, uniformtext_mode='hide')
             st.plotly_chart(fig2, use_container_width=True)
             
-        # -------------------------------------------------------------
         # 2. 섹터별 수익 현황 (좌: 차트 / 우: 표)
-        # -------------------------------------------------------------
         st.markdown("---")
         st.subheader("섹터별 수익 현황")
         
@@ -789,7 +823,6 @@ elif menu == "2. 포트폴리오 분석":
         sector_stats['Profit_KRW'] = sector_stats['Value_KRW'] - sector_stats['Invested_KRW']
         sector_stats['ROI'] = (sector_stats['Profit_KRW'] / sector_stats['Invested_KRW'] * 100).fillna(0)
         
-        # 표 출력을 위한 정렬 및 열 순서 정리
         sector_stats = sector_stats.sort_values(by='Value_KRW', ascending=False)
         display_cols_sec = ['Sector', 'Value_KRW', 'Profit_KRW', 'Invested_KRW', 'ROI']
         
@@ -800,14 +833,11 @@ elif menu == "2. 포트폴리오 분석":
                              color_continuous_scale='RdYlGn',
                              title="섹터별 수익률",
                              labels={'Sector': 'Sector', 'ROI': '수익률(%)'}) 
-            fig_roi.update_layout(
-                showlegend=False, 
-                coloraxis_colorbar=dict(title="수익률(%)")
-            )
+            fig_roi.update_layout(showlegend=False, coloraxis_colorbar=dict(title="수익률(%)"))
             st.plotly_chart(fig_roi, use_container_width=True)
             
         with col_sec_table:
-            st.write("") # 차트와의 높이 밸런스를 맞추기 위한 여백
+            st.write("") 
             st.write("")
             st.dataframe(
                 sector_stats[display_cols_sec].style.format({
@@ -828,9 +858,7 @@ elif menu == "2. 포트폴리오 분석":
                 }
             )
 
-        # -------------------------------------------------------------
         # 3. 그룹별 수익 현황 (좌: 차트 / 우: 표)
-        # -------------------------------------------------------------
         st.markdown("---")
         st.subheader("그룹별 수익 현황")
         
@@ -838,7 +866,6 @@ elif menu == "2. 포트폴리오 분석":
         group_stats['Profit_KRW'] = group_stats['Value_KRW'] - group_stats['Invested_KRW']
         group_stats['ROI'] = (group_stats['Profit_KRW'] / group_stats['Invested_KRW'] * 100).fillna(0)
         
-        # 표 출력을 위한 정렬 및 열 순서 정리
         group_stats = group_stats.sort_values(by='Value_KRW', ascending=False)
         display_cols_grp = ['Group', 'Value_KRW', 'Profit_KRW', 'Invested_KRW', 'ROI']
         
@@ -849,14 +876,11 @@ elif menu == "2. 포트폴리오 분석":
                                color_continuous_scale='RdYlGn',
                                title="그룹별 수익률",
                                labels={'Group': 'Group', 'ROI': '수익률(%)'}) 
-            fig_roi_g.update_layout(
-                showlegend=False,
-                coloraxis_colorbar=dict(title="수익률(%)")
-            )
+            fig_roi_g.update_layout(showlegend=False, coloraxis_colorbar=dict(title="수익률(%)"))
             st.plotly_chart(fig_roi_g, use_container_width=True)
             
         with col_grp_table:
-            st.write("") # 차트와의 높이 밸런스를 맞추기 위한 여백
+            st.write("") 
             st.write("")
             st.dataframe(
                 group_stats[display_cols_grp].style.format({
@@ -877,16 +901,13 @@ elif menu == "2. 포트폴리오 분석":
                 }
             )
 
-# -------------------------------------------------------------
         # 4. 리밸런싱 계산기
-        # -------------------------------------------------------------
         st.markdown("---")
         st.markdown("### ⚖️ 리밸런싱 계산기")
         
         include_cash = st.checkbox("예수금 포함하여 계산", value=True)
         st.caption("종목별 목표 비중(%)을 입력하세요. 합계가 100%를 넘지 않도록 주의하세요.")
 
-        # 목표 비중 세션 초기화
         if 'target_ratios' not in st.session_state:
             targets_df = load_data_from_sheet('targets')
             if not targets_df.empty:
@@ -894,12 +915,9 @@ elif menu == "2. 포트폴리오 분석":
             else:
                 st.session_state.target_ratios = {}
 
-        # 기본 세팅을 위한 현재 주식 평가금 총합
         current_total_stock_val_usd = sum([get_current_price(t) * d['qty'] for t, d in portfolio.items()])
-        
         tickers = list(portfolio.keys())
         
-        # 3열(Column) 그리드로 입력칸 배치
         cols = st.columns(3)
         for i, ticker in enumerate(tickers):
             with cols[i % 3]:
@@ -907,7 +925,6 @@ elif menu == "2. 포트폴리오 분석":
                 val_usd = curr_price * portfolio[ticker]['qty']
                 curr_ratio = (val_usd / current_total_stock_val_usd * 100) if current_total_stock_val_usd > 0 else 0
                 
-                # 저장된 값이 없으면 현재 비중을 기본값으로 설정
                 default_val = float(st.session_state.target_ratios.get(ticker, round(curr_ratio, 2)))
                 
                 st.number_input(
@@ -917,21 +934,17 @@ elif menu == "2. 포트폴리오 분석":
                     key=f"target_input_{ticker}"
                 )
                 
-        # 리밸런싱 계산 실행 버튼
         if st.button("리밸런싱 계산 실행"):
-            # 입력된 목표 비중 수집 및 저장
             new_targets = {t: st.session_state[f"target_input_{t}"] for t in tickers}
             save_df = pd.DataFrame({'Ticker': list(new_targets.keys()), 'Target_Ratio': list(new_targets.values())})
             save_data_to_sheet(save_df, 'targets')
             
-            # 비중 합계 검증
             total_target = sum(new_targets.values())
             if abs(total_target - 100.0) > 0.1:
                 st.warning(f"⚠️ 설정된 목표 비중 합계가 {total_target:.2f}% 입니다. (100%에 맞춰주세요)")
             else:
                 st.success("✅ 목표 비중이 저장되었습니다.")
                 
-            # 기준 자산금액 설정 (예수금 포함 여부)
             if include_cash:
                 total_calc_val_usd = current_total_stock_val_usd + (current_cash_krw / current_rate if current_rate > 0 else 0)
             else:
@@ -952,7 +965,6 @@ elif menu == "2. 포트폴리오 분석":
                 diff_usd = target_val_usd - val_usd
                 diff_krw = diff_usd * current_rate
                 
-                # 계산 (1달러 이하의 미세한 오차는 '유지'로 처리)
                 if diff_usd > 1.0: 
                     action = "매수"
                     trade_qty = diff_usd / curr_price if curr_price > 0 else 0
@@ -972,11 +984,9 @@ elif menu == "2. 포트폴리오 분석":
                     "거래 금액(₩)": round(abs(diff_krw))
                 })
                 
-                # 텍스트 안내 문구 생성
                 if action != "유지" and trade_qty >= 0.01:
                     action_texts.append(f"➡️ **{ticker}** {action} **{trade_qty:.2f}주** (약 ₩{abs(diff_krw):,.0f})")
                     
-            # 표(데이터프레임) 출력
             rebal_df = pd.DataFrame(rebal_data)
             st.dataframe(
                 rebal_df.style.format({
@@ -989,30 +999,37 @@ elif menu == "2. 포트폴리오 분석":
                 hide_index=True
             )
             
-            # 액션 요약 문구 출력
             st.markdown("<br>", unsafe_allow_html=True)
             if action_texts:
                 for text in action_texts:
                     st.markdown(text)
             else:
                 st.info("현재 목표 비중에 도달하여 추가적인 매매가 필요하지 않습니다.")
+
 elif menu == "3. 수익 분석":
     st.title("📈 수익 분석")
     
     if df.empty:
         st.warning("거래 내역이 없어 수익을 분석할 수 없습니다.")
     else:
+        col_input, _ = st.columns([2, 2])
+        with col_input:
+            custom_ticker_input = st.text_input("🔍 추가 비교할 주식 티커를 입력하세요 (예: AAPL, TSLA, NVDA)", "").strip().upper()
+
         with st.spinner('과거 자산 데이터를 계산 중입니다... (종목 수에 따라 시간이 걸릴 수 있습니다)'):
-            daily_df = calculate_historical_assets(df)
+            daily_df = calculate_historical_assets(df, custom_ticker=custom_ticker_input if custom_ticker_input else None)
 
         if not daily_df.empty:
             daily_df['Invested_Principal_10k'] = daily_df['Invested_Principal'] / 10000
             daily_df['Total_Asset_KRW_10k'] = daily_df['Total_Asset_KRW'] / 10000
             daily_df['SP500_Sim_Asset_KRW_10k'] = daily_df['SP500_Sim_Asset_KRW'] / 10000
+            daily_df['NASDAQ100_Sim_Asset_KRW_10k'] = daily_df['NASDAQ100_Sim_Asset_KRW'] / 10000
+            if 'Custom_Sim_Asset_KRW' in daily_df.columns:
+                daily_df['Custom_Sim_Asset_KRW_10k'] = daily_df['Custom_Sim_Asset_KRW'] / 10000
             daily_df['Profit_KRW_10k'] = daily_df['Profit_KRW'] / 10000
 
-            st.subheader("1. 벤치마크 비교 (시장 vs 내 자산)")
-            st.caption("선택한 기간의 **시작일 자산**을 기준으로, S&P 500 투자 가정 시 성과와 실제 내 자산 성과를 비교합니다.")
+            st.subheader("벤치마크 비교 (시장 vs 내 자산)")
+            st.caption("선택한 기간의 **시작일 자산**을 기준으로, 각 지수/종목 투자 가정 시 성과와 실제 내 자산 성과를 비교합니다.")
             
             period_option = st.radio("기간 선택", ["올해 (YTD)", "최근 1년", "전체 기간", "직접 입력"], horizontal=True, key="benchmark_period_select")
             
@@ -1037,6 +1054,7 @@ elif menu == "3. 수익 분석":
             if not plot_df.empty:
                 start_my_asset = plot_df['Total_Asset_KRW_10k'].iloc[0]
                 start_sp500_sim = plot_df['SP500_Sim_Asset_KRW_10k'].iloc[0]
+                start_nasdaq100_sim = plot_df['NASDAQ100_Sim_Asset_KRW_10k'].iloc[0]
                 start_principal = plot_df['Invested_Principal_10k'].iloc[0]
 
                 plot_df['Rebased_My_Asset'] = plot_df['Total_Asset_KRW_10k']
@@ -1047,16 +1065,36 @@ elif menu == "3. 수익 분석":
                 else:
                     plot_df['Rebased_SP500'] = plot_df['SP500_Sim_Asset_KRW_10k']
 
+                if start_nasdaq100_sim != 0:
+                    nasdaq100_ratio = start_my_asset / start_nasdaq100_sim
+                    plot_df['Rebased_NASDAQ100'] = plot_df['NASDAQ100_Sim_Asset_KRW_10k'] * nasdaq100_ratio
+                else:
+                    plot_df['Rebased_NASDAQ100'] = plot_df['NASDAQ100_Sim_Asset_KRW_10k']
+
+                if 'Custom_Sim_Asset_KRW_10k' in plot_df.columns and custom_ticker_input:
+                    start_custom_sim = plot_df['Custom_Sim_Asset_KRW_10k'].iloc[0]
+                    if start_custom_sim != 0:
+                        custom_ratio = start_my_asset / start_custom_sim
+                        plot_df['Rebased_Custom'] = plot_df['Custom_Sim_Asset_KRW_10k'] * custom_ratio
+                    else:
+                        plot_df['Rebased_Custom'] = plot_df['Custom_Sim_Asset_KRW_10k']
+
                 plot_df['Rebased_Principal'] = (plot_df['Invested_Principal_10k'] - start_principal) + start_my_asset
 
             else:
                 plot_df['Rebased_My_Asset'] = 0
                 plot_df['Rebased_SP500'] = 0
+                plot_df['Rebased_NASDAQ100'] = 0
                 plot_df['Rebased_Principal'] = 0
 
             fig_bm = go.Figure()
             fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_My_Asset'], mode='lines', name='내 총 자산 (실제)', line=dict(color='#d62728', width=2)))
             fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_SP500'], mode='lines', name='S&P 500 투자 가정', line=dict(color='#1f77b4', width=2)))
+            fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_NASDAQ100'], mode='lines', name='NASDAQ 100 투자 가정', line=dict(color='#2ca02c', width=2)))
+            
+            if 'Rebased_Custom' in plot_df.columns and custom_ticker_input:
+                fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_Custom'], mode='lines', name=f'{custom_ticker_input} 투자 가정', line=dict(color='#ff7f0e', width=2)))
+                
             fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_Principal'], mode='lines', name='현금 보유 가정 (입출금 반영)', line=dict(color='gray', dash='dash', width=1)))
 
             fig_bm.update_layout(
@@ -1066,14 +1104,14 @@ elif menu == "3. 수익 분석":
             )
             st.plotly_chart(fig_bm, use_container_width=True)
             
-            st.subheader("2. 누적 수익금 추이 (전체 기간)")
+            st.subheader("누적 수익금 추이 (전체 기간)")
             fig_profit = px.line(daily_df, x=daily_df.index, y='Profit_KRW_10k', title="일별 누적 수익금 변화")
             fig_profit.update_traces(line_color='#2ca02c') 
             fig_profit.add_hline(y=0, line_dash="dot", line_color="black")
             fig_profit.update_layout(xaxis_title="날짜", yaxis_title="수익금 (단위: 만원)", hovermode="x unified")
             st.plotly_chart(fig_profit, use_container_width=True)
 
-            st.subheader("3. 연도별 수익 현황")
+            st.subheader("연도별 수익 현황")
             daily_df['Prev_Profit'] = daily_df['Profit_KRW'].shift(1).fillna(0)
             daily_df['Daily_Profit_Change'] = daily_df['Profit_KRW'] - daily_df['Prev_Profit']
             daily_df['Year'] = daily_df.index.year
