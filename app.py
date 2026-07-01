@@ -499,6 +499,15 @@ def color_negative_red(val):
     else:
         return 'color: black'
 
+# [NEW] 리밸런싱 계산기 전용 액션 텍스트 색상 적용 함수
+def color_action(val):
+    if val == "매수":
+        return 'color: blue; font-weight: bold;'
+    elif val == "매도":
+        return 'color: red; font-weight: bold;'
+    else:
+        return 'color: black;'
+
 if menu == "1. 총 자산 확인":
     st.title("💰 총 자산 현황 및 목표")
     
@@ -898,6 +907,9 @@ elif menu == "2. 포트폴리오 분석":
                 }
             )
 
+        # -------------------------------------------------------------
+        # 4. 리밸런싱 계산기 (수정됨 ❗)
+        # -------------------------------------------------------------
         st.markdown("---")
         st.markdown("### ⚖️ 리밸런싱 계산기")
         
@@ -980,8 +992,11 @@ elif menu == "2. 포트폴리오 분석":
                     "거래 금액(₩)": round(abs(diff_krw))
                 })
                 
-                if action != "유지" and trade_qty >= 0.01:
-                    action_texts.append(f"➡️ **{ticker}** {action} **{trade_qty:.2f}주** (약 ₩{abs(diff_krw):,.0f})")
+                # [수정됨 ❗] 하단 알림 텍스트의 매수/매도 이모지 및 폰트 색상 가시성 최적화
+                if action == "매수" and trade_qty >= 0.01:
+                    action_texts.append(f"🟢 **{ticker}** | :blue[매수] **{trade_qty:.2f}주** (약 ₩{abs(diff_krw):,.0f})")
+                elif action == "매도" and trade_qty >= 0.01:
+                    action_texts.append(f"🔴 **{ticker}** | :red[매도] **{trade_qty:.2f}주** (약 ₩{abs(diff_krw):,.0f})")
                     
             rebal_df = pd.DataFrame(rebal_data)
             st.dataframe(
@@ -990,7 +1005,8 @@ elif menu == "2. 포트폴리오 분석":
                     "목표 비중(%)": "{:.2f}",
                     "거래 수량": "{:.2f}",
                     "거래 금액(₩)": "{:,.0f}"
-                }),
+                })
+                .map(color_action, subset=["액션"]), # [수정됨 ❗] 액션 컬럼의 셀 텍스트 자체를 컬러링
                 use_container_width=True,
                 hide_index=True
             )
@@ -1048,7 +1064,6 @@ elif menu == "3. 수익 분석":
                 plot_df = daily_df[daily_df.index >= custom_start_ts].copy()
 
             if not plot_df.empty:
-                # 기준점(시작일)에 맞춰 그래프 Rebase
                 start_my_asset = plot_df['Total_Asset_KRW_10k'].iloc[0]
                 start_sp500_sim = plot_df['SP500_Sim_Asset_KRW_10k'].iloc[0]
                 start_nasdaq100_sim = plot_df['NASDAQ100_Sim_Asset_KRW_10k'].iloc[0]
@@ -1084,7 +1099,6 @@ elif menu == "3. 수익 분석":
                 plot_df['Rebased_NASDAQ100'] = 0
                 plot_df['Rebased_Principal'] = 0
 
-            # [수정됨] ❗ 그래프 내부 라인을 체크박스로 제어하는 UI 부분
             st.markdown("<br><b>👀 그래프 표시 항목 선택</b>", unsafe_allow_html=True)
             chk_cols = st.columns(5)
             with chk_cols[0]:
@@ -1094,7 +1108,6 @@ elif menu == "3. 수익 분석":
             with chk_cols[2]:
                 show_nasdaq100 = st.checkbox("NASDAQ 100 가정", value=True)
             with chk_cols[3]:
-                # 커스텀 티커가 있을 때만 활성화, 없으면 비활성 안내
                 if custom_ticker_input and 'Rebased_Custom' in plot_df.columns:
                     show_custom = st.checkbox(f"{custom_ticker_input} 가정", value=True)
                 else:
