@@ -217,9 +217,16 @@ def calculate_historical_assets(transactions_df, custom_ticker=None):
     daily_df['QQQ_Price'] = daily_df['QQQ_Price'].ffill().bfill()
 
     has_custom = False
+    is_korean_custom = False
+    
     if custom_ticker:
+        # [수정됨] 한국 주식/지수 여부 판별 (6자리 숫자이거나 KS, KQ로 시작하는 경우)
+        ticker_upper = custom_ticker.strip().upper()
+        if (ticker_upper.isdigit() and len(ticker_upper) == 6) or ticker_upper.startswith('KS') or ticker_upper.startswith('KQ'):
+            is_korean_custom = True
+            
         try:
-            custom_data = fdr.DataReader(custom_ticker, start_date - timedelta(days=7), end_date)['Close']
+            custom_data = fdr.DataReader(ticker_upper, start_date - timedelta(days=7), end_date)['Close']
             custom_data = custom_data[~custom_data.index.duplicated(keep='last')]
             daily_df['Custom_Price'] = custom_data
             daily_df['Custom_Price'] = daily_df['Custom_Price'].ffill().bfill()
@@ -271,7 +278,11 @@ def calculate_historical_assets(transactions_df, custom_ticker=None):
             daily_df.at[d, 'SPY_Qty_Change'] += usd_amt / spy_price_then
             daily_df.at[d, 'QQQ_Qty_Change'] += usd_amt / qqq_price_then
             if has_custom:
-                daily_df.at[d, 'Custom_Qty_Change'] += usd_amt / custom_price_then
+                # [수정됨] 한국 주식은 원화 그대로 매수 수량 계산, 미국은 달러로 계산
+                if is_korean_custom:
+                    daily_df.at[d, 'Custom_Qty_Change'] += amt_krw / custom_price_then
+                else:
+                    daily_df.at[d, 'Custom_Qty_Change'] += usd_amt / custom_price_then
 
         elif row['Type'] == '출금':
             daily_df.at[d, 'Cash_Change'] -= amt_krw
@@ -280,7 +291,10 @@ def calculate_historical_assets(transactions_df, custom_ticker=None):
             daily_df.at[d, 'SPY_Qty_Change'] -= usd_amt / spy_price_then
             daily_df.at[d, 'QQQ_Qty_Change'] -= usd_amt / qqq_price_then
             if has_custom:
-                daily_df.at[d, 'Custom_Qty_Change'] -= usd_amt / custom_price_then
+                if is_korean_custom:
+                    daily_df.at[d, 'Custom_Qty_Change'] -= amt_krw / custom_price_then
+                else:
+                    daily_df.at[d, 'Custom_Qty_Change'] -= usd_amt / custom_price_then
 
         elif row['Type'] == '매수':
             daily_df.at[d, 'Cash_Change'] -= amt_krw
@@ -318,7 +332,11 @@ def calculate_historical_assets(transactions_df, custom_ticker=None):
     daily_df['SP500_Sim_Asset_KRW'] = daily_df['SPY_Sim_Qty'] * daily_df['SPY_Price'] * daily_df['Exchange_Rate']
     daily_df['NASDAQ100_Sim_Asset_KRW'] = daily_df['QQQ_Sim_Qty'] * daily_df['QQQ_Price'] * daily_df['Exchange_Rate']
     if has_custom:
-        daily_df['Custom_Sim_Asset_KRW'] = daily_df['Custom_Sim_Qty'] * daily_df['Custom_Price'] * daily_df['Exchange_Rate']
+        # [수정됨] 한국 주식일 경우 환율 변환 없이 수량 * 현재가 만 계산
+        if is_korean_custom:
+            daily_df['Custom_Sim_Asset_KRW'] = daily_df['Custom_Sim_Qty'] * daily_df['Custom_Price']
+        else:
+            daily_df['Custom_Sim_Asset_KRW'] = daily_df['Custom_Sim_Qty'] * daily_df['Custom_Price'] * daily_df['Exchange_Rate']
 
     return daily_df
 
@@ -499,7 +517,6 @@ def color_negative_red(val):
     else:
         return 'color: black'
 
-# [NEW] 리밸런싱 계산기 전용 액션 텍스트 색상 적용 함수
 def color_action(val):
     if val == "매수":
         return 'color: blue; font-weight: bold;'
@@ -907,9 +924,6 @@ elif menu == "2. 포트폴리오 분석":
                 }
             )
 
-        # -------------------------------------------------------------
-        # 4. 리밸런싱 계산기 (수정됨 ❗)
-        # -------------------------------------------------------------
         st.markdown("---")
         st.markdown("### ⚖️ 리밸런싱 계산기")
         
@@ -992,7 +1006,6 @@ elif menu == "2. 포트폴리오 분석":
                     "거래 금액(₩)": round(abs(diff_krw))
                 })
                 
-                # [수정됨 ❗] 하단 알림 텍스트의 매수/매도 이모지 및 폰트 색상 가시성 최적화
                 if action == "매수" and trade_qty >= 0.01:
                     action_texts.append(f"🟢 **{ticker}** | :blue[매수] **{trade_qty:.2f}주** (약 ₩{abs(diff_krw):,.0f})")
                 elif action == "매도" and trade_qty >= 0.01:
@@ -1006,7 +1019,7 @@ elif menu == "2. 포트폴리오 분석":
                     "거래 수량": "{:.2f}",
                     "거래 금액(₩)": "{:,.0f}"
                 })
-                .map(color_action, subset=["액션"]), # [수정됨 ❗] 액션 컬럼의 셀 텍스트 자체를 컬러링
+                .map(color_action, subset=["액션"]),
                 use_container_width=True,
                 hide_index=True
             )
@@ -1026,7 +1039,7 @@ elif menu == "3. 수익 분석":
     else:
         col_input, _ = st.columns([2, 2])
         with col_input:
-            custom_ticker_input = st.text_input("🔍 추가 비교할 주식 티커를 입력하세요 (예: AAPL, TSLA, NVDA)", "").strip().upper()
+            custom_ticker_input = st.text_input("🔍 추가 비교할 주식 티커 (미국 티커, 코스피(KS11), 삼성전자(005930) 등)", "").strip().upper()
 
         with st.spinner('과거 자산 데이터를 계산 중입니다... (종목 수에 따라 시간이 걸릴 수 있습니다)'):
             daily_df = calculate_historical_assets(df, custom_ticker=custom_ticker_input if custom_ticker_input else None)
