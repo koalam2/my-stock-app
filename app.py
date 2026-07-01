@@ -709,7 +709,6 @@ elif menu == "2. 포트폴리오 분석":
 
         pf_df.sort_values(by=['Group_Order', 'Sector_Order', 'Value_USD'], ascending=[True, True, False], inplace=True)
         
-        # 1. 상단 원형 차트 3분할 (주식별/그룹별/섹터별 비중)
         col1, col2, col3 = st.columns(3)
         
         def prepare_pie_data(df, group_col, value_col, threshold=0.01):
@@ -815,7 +814,6 @@ elif menu == "2. 포트폴리오 분석":
             fig2.update_layout(uniformtext_minsize=12, uniformtext_mode='hide')
             st.plotly_chart(fig2, use_container_width=True)
             
-        # 2. 섹터별 수익 현황 (좌: 차트 / 우: 표)
         st.markdown("---")
         st.subheader("섹터별 수익 현황")
         
@@ -858,7 +856,6 @@ elif menu == "2. 포트폴리오 분석":
                 }
             )
 
-        # 3. 그룹별 수익 현황 (좌: 차트 / 우: 표)
         st.markdown("---")
         st.subheader("그룹별 수익 현황")
         
@@ -901,7 +898,6 @@ elif menu == "2. 포트폴리오 분석":
                 }
             )
 
-        # 4. 리밸런싱 계산기
         st.markdown("---")
         st.markdown("### ⚖️ 리밸런싱 계산기")
         
@@ -1052,6 +1048,7 @@ elif menu == "3. 수익 분석":
                 plot_df = daily_df[daily_df.index >= custom_start_ts].copy()
 
             if not plot_df.empty:
+                # 기준점(시작일)에 맞춰 그래프 Rebase
                 start_my_asset = plot_df['Total_Asset_KRW_10k'].iloc[0]
                 start_sp500_sim = plot_df['SP500_Sim_Asset_KRW_10k'].iloc[0]
                 start_nasdaq100_sim = plot_df['NASDAQ100_Sim_Asset_KRW_10k'].iloc[0]
@@ -1087,15 +1084,37 @@ elif menu == "3. 수익 분석":
                 plot_df['Rebased_NASDAQ100'] = 0
                 plot_df['Rebased_Principal'] = 0
 
+            # [수정됨] ❗ 그래프 내부 라인을 체크박스로 제어하는 UI 부분
+            st.markdown("<br><b>👀 그래프 표시 항목 선택</b>", unsafe_allow_html=True)
+            chk_cols = st.columns(5)
+            with chk_cols[0]:
+                show_my_asset = st.checkbox("내 총 자산 (실제)", value=True)
+            with chk_cols[1]:
+                show_sp500 = st.checkbox("S&P 500 가정", value=True)
+            with chk_cols[2]:
+                show_nasdaq100 = st.checkbox("NASDAQ 100 가정", value=True)
+            with chk_cols[3]:
+                # 커스텀 티커가 있을 때만 활성화, 없으면 비활성 안내
+                if custom_ticker_input and 'Rebased_Custom' in plot_df.columns:
+                    show_custom = st.checkbox(f"{custom_ticker_input} 가정", value=True)
+                else:
+                    st.caption("🔒 커스텀 티커 미입력")
+                    show_custom = False
+            with chk_cols[4]:
+                show_principal = st.checkbox("현금 보유(원금) 가정", value=True)
+
             fig_bm = go.Figure()
-            fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_My_Asset'], mode='lines', name='내 총 자산 (실제)', line=dict(color='#d62728', width=2)))
-            fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_SP500'], mode='lines', name='S&P 500 투자 가정', line=dict(color='#1f77b4', width=2)))
-            fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_NASDAQ100'], mode='lines', name='NASDAQ 100 투자 가정', line=dict(color='#2ca02c', width=2)))
             
-            if 'Rebased_Custom' in plot_df.columns and custom_ticker_input:
+            if show_my_asset:
+                fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_My_Asset'], mode='lines', name='내 총 자산 (실제)', line=dict(color='#d62728', width=2)))
+            if show_sp500:
+                fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_SP500'], mode='lines', name='S&P 500 투자 가정', line=dict(color='#1f77b4', width=2)))
+            if show_nasdaq100:
+                fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_NASDAQ100'], mode='lines', name='NASDAQ 100 투자 가정', line=dict(color='#2ca02c', width=2)))
+            if show_custom and custom_ticker_input and 'Rebased_Custom' in plot_df.columns:
                 fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_Custom'], mode='lines', name=f'{custom_ticker_input} 투자 가정', line=dict(color='#ff7f0e', width=2)))
-                
-            fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_Principal'], mode='lines', name='현금 보유 가정 (입출금 반영)', line=dict(color='gray', dash='dash', width=1)))
+            if show_principal:
+                fig_bm.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Rebased_Principal'], mode='lines', name='현금 보유 가정 (입출금 반영)', line=dict(color='gray', dash='dash', width=1)))
 
             fig_bm.update_layout(
                 xaxis_title="날짜", yaxis_title="평가금액 (단위: 만원)",
