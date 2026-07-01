@@ -673,7 +673,7 @@ elif menu == "2. 포트폴리오 분석":
 
         pf_df.sort_values(by=['Group_Order', 'Sector_Order', 'Value_USD'], ascending=[True, True, False], inplace=True)
         
-        # [수정됨] 탭 대신 3개의 컬럼으로 분할하여 한 화면에 배치
+        # 1. 상단 원형 차트 3분할 (주식별/그룹별/섹터별 비중)
         col1, col2, col3 = st.columns(3)
         
         def prepare_pie_data(df, group_col, value_col, threshold=0.01):
@@ -713,7 +713,7 @@ elif menu == "2. 포트폴리오 분석":
             return main_df
 
         with col1:
-            st.subheader("주식별 비중") # 숫자 제거
+            st.subheader("주식별 비중") 
             stock_pie_df = prepare_pie_data(pf_df, 'Ticker', 'Value_USD', threshold=0.01)
             
             fig1 = px.pie(stock_pie_df, values='Value_USD', names='Ticker', color='Sector', 
@@ -729,12 +729,11 @@ elif menu == "2. 포트폴리오 분석":
                 texttemplate='%{label}<br>%{percent:.0%}',
                 hovertemplate='<b>%{label}</b><br>비중: %{percent}<br>평가금: $%{value:,.2f}%{customdata[0]}<extra></extra>'
             )
-            # [수정됨] 모바일 가로 범례 설정을 지워 사진처럼 범례가 우측에 깔끔하게 나오도록 함
             fig1.update_layout(uniformtext_minsize=12, uniformtext_mode='hide')
             st.plotly_chart(fig1, use_container_width=True)
             
         with col2:
-            st.subheader("그룹별 비중") # 숫자 제거
+            st.subheader("그룹별 비중") 
             group_agg = pf_df.groupby(['Group', 'Group_Order'], as_index=False)['Value_USD'].sum()
             group_agg.sort_values(by='Group_Order', inplace=True)
             
@@ -757,7 +756,7 @@ elif menu == "2. 포트폴리오 분석":
             st.plotly_chart(fig3, use_container_width=True)
 
         with col3:
-            st.subheader("섹터별 비중") # 숫자 제거
+            st.subheader("섹터별 비중")
             sector_agg = pf_df.groupby(['Group', 'Group_Order', 'Sector', 'Sector_Order'], as_index=False)['Value_USD'].sum()
             sector_agg.sort_values(by=['Group_Order', 'Sector_Order'], inplace=True)
             
@@ -780,109 +779,109 @@ elif menu == "2. 포트폴리오 분석":
             fig2.update_layout(uniformtext_minsize=12, uniformtext_mode='hide')
             st.plotly_chart(fig2, use_container_width=True)
             
+        # -------------------------------------------------------------
+        # 2. 섹터별 수익 현황 (좌: 차트 / 우: 표)
+        # -------------------------------------------------------------
         st.markdown("---")
-        st.subheader("섹터별 수익 현황") # 숫자 제거
+        st.subheader("섹터별 수익 현황")
         
         sector_stats = pf_df.groupby('Sector')[['Invested_KRW', 'Value_KRW']].sum().reset_index()
         sector_stats['Profit_KRW'] = sector_stats['Value_KRW'] - sector_stats['Invested_KRW']
-        sector_stats['수익금(만원)'] = sector_stats['Profit_KRW'] / 10000
-        
         sector_stats['ROI'] = (sector_stats['Profit_KRW'] / sector_stats['Invested_KRW'] * 100).fillna(0)
-        sector_stats = sector_stats.sort_values(by='ROI', ascending=False)
         
-        tab_sec_tbl, tab_sec_roi, tab_sec_profit = st.tabs(["📋 표로 보기", "📊 수익률 차트", "💰 수익금 차트"])
+        # 표 출력을 위한 정렬 및 열 순서 정리
+        sector_stats = sector_stats.sort_values(by='Value_KRW', ascending=False)
+        display_cols_sec = ['Sector', 'Value_KRW', 'Profit_KRW', 'Invested_KRW', 'ROI']
         
-        with tab_sec_tbl:
+        col_sec_chart, col_sec_table = st.columns([1, 1])
+        
+        with col_sec_chart:
+            fig_roi = px.bar(sector_stats, x='Sector', y='ROI', color='ROI',
+                             color_continuous_scale='RdYlGn',
+                             title="섹터별 수익률",
+                             labels={'Sector': 'Sector', 'ROI': '수익률(%)'}) 
+            fig_roi.update_layout(
+                showlegend=False, 
+                coloraxis_colorbar=dict(title="수익률(%)")
+            )
+            st.plotly_chart(fig_roi, use_container_width=True)
+            
+        with col_sec_table:
+            st.write("") # 차트와의 높이 밸런스를 맞추기 위한 여백
+            st.write("")
             st.dataframe(
-                sector_stats.style.format({
-                    "Invested_KRW": "{:,.0f}",
+                sector_stats[display_cols_sec].style.format({
                     "Value_KRW": "{:,.0f}",
                     "Profit_KRW": "{:,.0f}",
-                    "ROI": "{:.2f}%"
+                    "Invested_KRW": "{:,.0f}",
+                    "ROI": "{:.2f}"
                 })
                 .map(color_negative_red, subset=["Profit_KRW", "ROI"]),
                 use_container_width=True,
+                hide_index=True,
                 column_config={
-                    "Sector": "섹터",
-                    "Invested_KRW": "총 투자금(₩)",
-                    "Value_KRW": "평가금액(₩)",
-                    "Profit_KRW": "손익(₩)",
+                    "Sector": "Sector",
+                    "Value_KRW": "평가금액",
+                    "Profit_KRW": "평가손익",
+                    "Invested_KRW": "매입원가",
                     "ROI": "수익률(%)"
                 }
             )
 
-        with tab_sec_roi:
-            fig_roi = px.bar(sector_stats, x='Sector', y='ROI', color='Sector', 
-                             text_auto='.2f',
-                             title="섹터별 수익률 (%)",
-                             color_discrete_map=SECTOR_COLOR_MAP,
-                             labels={'Sector': '섹터', 'ROI': '수익률(%)'}) 
-            fig_roi.update_layout(showlegend=False, yaxis_title="수익률 (%)")
-            st.plotly_chart(fig_roi, use_container_width=True)
-        
-        with tab_sec_profit:
-            fig_profit = px.bar(sector_stats, x='Sector', y='수익금(만원)', color='Sector',
-                                text_auto=',.0f',
-                                title="섹터별 수익금 (단위: 만원)",
-                                color_discrete_map=SECTOR_COLOR_MAP,
-                                labels={'Sector': '섹터', '수익금(만원)': '수익금(만원)'}) 
-            fig_profit.update_layout(showlegend=False, yaxis_title="수익금 (만원)")
-            st.plotly_chart(fig_profit, use_container_width=True)
-
+        # -------------------------------------------------------------
+        # 3. 그룹별 수익 현황 (좌: 차트 / 우: 표)
+        # -------------------------------------------------------------
         st.markdown("---")
-        st.subheader("그룹별 수익 현황") # 숫자 제거
+        st.subheader("그룹별 수익 현황")
         
         group_stats = pf_df.groupby('Group')[['Invested_KRW', 'Value_KRW']].sum().reset_index()
         group_stats['Profit_KRW'] = group_stats['Value_KRW'] - group_stats['Invested_KRW']
-        group_stats['수익금(만원)'] = group_stats['Profit_KRW'] / 10000
-        
         group_stats['ROI'] = (group_stats['Profit_KRW'] / group_stats['Invested_KRW'] * 100).fillna(0)
-        group_stats = group_stats.sort_values(by='ROI', ascending=False)
         
-        tab_grp_tbl, tab_grp_roi, tab_grp_profit = st.tabs(["📋 표로 보기", "📊 수익률 차트", "💰 수익금 차트"])
+        # 표 출력을 위한 정렬 및 열 순서 정리
+        group_stats = group_stats.sort_values(by='Value_KRW', ascending=False)
+        display_cols_grp = ['Group', 'Value_KRW', 'Profit_KRW', 'Invested_KRW', 'ROI']
         
-        with tab_grp_tbl:
+        col_grp_chart, col_grp_table = st.columns([1, 1])
+        
+        with col_grp_chart:
+            fig_roi_g = px.bar(group_stats, x='Group', y='ROI', color='ROI',
+                               color_continuous_scale='RdYlGn',
+                               title="그룹별 수익률",
+                               labels={'Group': 'Group', 'ROI': '수익률(%)'}) 
+            fig_roi_g.update_layout(
+                showlegend=False,
+                coloraxis_colorbar=dict(title="수익률(%)")
+            )
+            st.plotly_chart(fig_roi_g, use_container_width=True)
+            
+        with col_grp_table:
+            st.write("") # 차트와의 높이 밸런스를 맞추기 위한 여백
+            st.write("")
             st.dataframe(
-                group_stats.style.format({
-                    "Invested_KRW": "{:,.0f}",
+                group_stats[display_cols_grp].style.format({
                     "Value_KRW": "{:,.0f}",
                     "Profit_KRW": "{:,.0f}",
-                    "ROI": "{:.2f}%"
+                    "Invested_KRW": "{:,.0f}",
+                    "ROI": "{:.2f}"
                 })
                 .map(color_negative_red, subset=["Profit_KRW", "ROI"]),
                 use_container_width=True,
+                hide_index=True,
                 column_config={
-                    "Group": "그룹",
-                    "Invested_KRW": "총 투자금(₩)",
-                    "Value_KRW": "평가금액(₩)",
-                    "Profit_KRW": "손익(₩)",
+                    "Group": "Group",
+                    "Value_KRW": "평가금액",
+                    "Profit_KRW": "평가손익",
+                    "Invested_KRW": "매입원가",
                     "ROI": "수익률(%)"
                 }
             )
-            
-        with tab_grp_roi:
-            fig_roi_g = px.bar(group_stats, x='Group', y='ROI', color='Group', 
-                             text_auto='.2f',
-                             title="그룹별 수익률 (%)",
-                             color_discrete_map=GROUP_COLOR_MAP,
-                             labels={'Group': '그룹', 'ROI': '수익률(%)'}) 
-            fig_roi_g.update_layout(showlegend=False, yaxis_title="수익률 (%)")
-            st.plotly_chart(fig_roi_g, use_container_width=True)
-            
-        with tab_grp_profit:
-            fig_profit_g = px.bar(group_stats, x='Group', y='수익금(만원)', color='Group',
-                                text_auto=',.0f',
-                                title="그룹별 수익금 (단위: 만원)",
-                                color_discrete_map=GROUP_COLOR_MAP,
-                                labels={'Group': '그룹', '수익금(만원)': '수익금(만원)'}) 
-            fig_profit_g.update_layout(showlegend=False, yaxis_title="수익금 (만원)")
-            st.plotly_chart(fig_profit_g, use_container_width=True)
 
         # -------------------------------------------------------------
-        # 6. 목표 비중 설정 및 리밸런싱
+        # 4. 목표 비중 설정 및 리밸런싱
         # -------------------------------------------------------------
         st.markdown("---")
-        st.subheader("🎯 목표 비중 설정 및 리밸런싱") # 숫자 제거
+        st.subheader("🎯 목표 비중 설정 및 리밸런싱") 
         st.caption("각 종목의 **목표 비중(%)** 열을 수정하세요. 현재 자산과 비교하여 필요한 매수/매도 수량을 실시간으로 알려줍니다.")
 
         if 'target_ratios' not in st.session_state:
@@ -979,7 +978,6 @@ elif menu == "2. 포트폴리오 분석":
             key="rebalance_editor",
             on_change=update_target_ratio_callback
         )
-
 elif menu == "3. 수익 분석":
     st.title("📈 수익 분석")
     
