@@ -877,13 +877,16 @@ elif menu == "2. 포트폴리오 분석":
                 }
             )
 
-        # -------------------------------------------------------------
-        # 4. 목표 비중 설정 및 리밸런싱
+# -------------------------------------------------------------
+        # 4. 리밸런싱 계산기
         # -------------------------------------------------------------
         st.markdown("---")
-        st.subheader("🎯 목표 비중 설정 및 리밸런싱") 
-        st.caption("각 종목의 **목표 비중(%)** 열을 수정하세요. 현재 자산과 비교하여 필요한 매수/매도 수량을 실시간으로 알려줍니다.")
+        st.markdown("### ⚖️ 리밸런싱 계산기")
+        
+        include_cash = st.checkbox("예수금 포함하여 계산", value=True)
+        st.caption("종목별 목표 비중(%)을 입력하세요. 합계가 100%를 넘지 않도록 주의하세요.")
 
+        # 목표 비중 세션 초기화
         if 'target_ratios' not in st.session_state:
             targets_df = load_data_from_sheet('targets')
             if not targets_df.empty:
@@ -891,93 +894,108 @@ elif menu == "2. 포트폴리오 분석":
             else:
                 st.session_state.target_ratios = {}
 
-        st.session_state.rebal_tickers = list(portfolio.keys())
-
-        def update_target_ratio_callback():
-            changes = st.session_state.rebalance_editor['edited_rows']
-            for row_idx_str, col_changes in changes.items():
-                if 'Target_Ratio' in col_changes:
-                    row_idx = int(row_idx_str)
-                    ticker = st.session_state.rebal_tickers[row_idx]
-                    new_ratio = col_changes['Target_Ratio']
-                    st.session_state.target_ratios[ticker] = new_ratio
-
-        total_pf_value_usd = sum([get_current_price(t) * d['qty'] for t, d in portfolio.items()])
+        # 기본 세팅을 위한 현재 주식 평가금 총합
+        current_total_stock_val_usd = sum([get_current_price(t) * d['qty'] for t, d in portfolio.items()])
         
-        rebal_list = []
-        for ticker in st.session_state.rebal_tickers:
-            data = portfolio[ticker]
-            curr_price = get_current_price(ticker)
-            qty = data['qty']
-            val_usd = curr_price * qty
-            curr_ratio = (val_usd / total_pf_value_usd * 100) if total_pf_value_usd > 0 else 0
-            
-            target_ratio = st.session_state.target_ratios.get(ticker, round(curr_ratio, 1))
-            
-            target_val_usd = total_pf_value_usd * (target_ratio / 100)
-            diff_usd = target_val_usd - val_usd
-            
-            action = "-"
-            if curr_price > 0:
-                shares = diff_usd / curr_price
-                ratio_diff = target_ratio - curr_ratio
+        tickers = list(portfolio.keys())
+        
+        # 3열(Column) 그리드로 입력칸 배치
+        cols = st.columns(3)
+        for i, ticker in enumerate(tickers):
+            with cols[i % 3]:
+                curr_price = get_current_price(ticker)
+                val_usd = curr_price * portfolio[ticker]['qty']
+                curr_ratio = (val_usd / current_total_stock_val_usd * 100) if current_total_stock_val_usd > 0 else 0
                 
-                if shares >= 1.0 or ratio_diff >= 5.0:
-                    shares_disp = f"{int(shares):,}" if shares >= 1.0 else f"{shares:.2f}"
-                    action = f"🛒 +{shares_disp}주 매수"
-                elif shares <= -1.0 or ratio_diff <= -5.0:
-                    shares_disp = f"{-int(shares):,}" if shares <= -1.0 else f"{-shares:.2f}"
-                    action = f"💰 -{shares_disp}주 매도"
-
-            rebal_list.append({
-                'Ticker': ticker,
-                'Price_USD': curr_price,
-                'Quantity': qty,
-                'Value_USD': val_usd,
-                'Current_Ratio': curr_ratio,
-                'Target_Ratio': target_ratio,
-                'Diff_USD': diff_usd,
-                'Action': action
-            })
+                # 저장된 값이 없으면 현재 비중을 기본값으로 설정
+                default_val = float(st.session_state.target_ratios.get(ticker, round(curr_ratio, 2)))
+                
+                st.number_input(
+                    f"{ticker} 목표 비중(%)", 
+                    value=default_val, 
+                    min_value=0.0, max_value=100.0, step=0.1, format="%.2f",
+                    key=f"target_input_{ticker}"
+                )
+                
+        # 리밸런싱 계산 실행 버튼
+        if st.button("리밸런싱 계산 실행"):
+            # 입력된 목표 비중 수집 및 저장
+            new_targets = {t: st.session_state[f"target_input_{t}"] for t in tickers}
+            save_df = pd.DataFrame({'Ticker': list(new_targets.keys()), 'Target_Ratio': list(new_targets.values())})
+            save_data_to_sheet(save_df, 'targets')
             
-        rebal_df = pd.DataFrame(rebal_list)
-        
-        total_target_ratio = sum([r['Target_Ratio'] for r in rebal_list])
-        
-        col_msg, col_btn = st.columns([3, 1])
-        with col_msg:
-            if abs(total_target_ratio - 100.0) > 0.1:
-                st.warning(f"⚠️ 설정된 목표 비중 합계: **{total_target_ratio:.1f}%** (100%에 맞춰주세요)")
+            # 비중 합계 검증
+            total_target = sum(new_targets.values())
+            if abs(total_target - 100.0) > 0.1:
+                st.warning(f"⚠️ 설정된 목표 비중 합계가 {total_target:.2f}% 입니다. (100%에 맞춰주세요)")
             else:
-                st.success(f"✅ 목표 비중 합계: **{total_target_ratio:.1f}%**")
+                st.success("✅ 목표 비중이 저장되었습니다.")
                 
-        with col_btn:
-            if st.button("💾 목표 비중 저장하기", use_container_width=True, type="primary"):
-                save_df = pd.DataFrame({
-                    'Ticker': list(st.session_state.target_ratios.keys()),
-                    'Target_Ratio': list(st.session_state.target_ratios.values())
+            # 기준 자산금액 설정 (예수금 포함 여부)
+            if include_cash:
+                total_calc_val_usd = current_total_stock_val_usd + (current_cash_krw / current_rate if current_rate > 0 else 0)
+            else:
+                total_calc_val_usd = current_total_stock_val_usd
+                
+            rebal_data = []
+            action_texts = []
+            
+            for ticker in tickers:
+                target_ratio = new_targets[ticker]
+                curr_price = get_current_price(ticker)
+                qty = portfolio[ticker]['qty']
+                val_usd = curr_price * qty
+                
+                curr_ratio = (val_usd / total_calc_val_usd * 100) if total_calc_val_usd > 0 else 0
+                target_val_usd = total_calc_val_usd * (target_ratio / 100)
+                
+                diff_usd = target_val_usd - val_usd
+                diff_krw = diff_usd * current_rate
+                
+                # 계산 (1달러 이하의 미세한 오차는 '유지'로 처리)
+                if diff_usd > 1.0: 
+                    action = "매수"
+                    trade_qty = diff_usd / curr_price if curr_price > 0 else 0
+                elif diff_usd < -1.0:
+                    action = "매도"
+                    trade_qty = abs(diff_usd) / curr_price if curr_price > 0 else 0
+                else:
+                    action = "유지"
+                    trade_qty = 0
+                    
+                rebal_data.append({
+                    "종목": ticker,
+                    "현재 비중(%)": round(curr_ratio, 2),
+                    "목표 비중(%)": round(target_ratio, 2),
+                    "액션": action,
+                    "거래 수량": round(trade_qty, 2),
+                    "거래 금액(₩)": round(abs(diff_krw))
                 })
-                save_data_to_sheet(save_df, 'targets')
-                st.toast("목표 비중이 구글 시트에 안전하게 저장되었습니다!", icon="✅")
-
-        st.data_editor(
-            rebal_df,
-            disabled=['Ticker', 'Price_USD', 'Quantity', 'Value_USD', 'Current_Ratio', 'Diff_USD', 'Action'],
-            hide_index=True,
-            column_config={
-                "Ticker": st.column_config.TextColumn("종목", width="medium"),
-                "Price_USD": st.column_config.NumberColumn("현재가($)", format="$%.2f"),
-                "Quantity": st.column_config.NumberColumn("보유 수량", format="%.4f"),
-                "Value_USD": st.column_config.NumberColumn("평가액($)", format="$%.2f"),
-                "Current_Ratio": st.column_config.NumberColumn("현재 비중(%)", format="%.1f%%"),
-                "Target_Ratio": st.column_config.NumberColumn("🎯 목표 비중(%) ✏️", format="%.1f", min_value=0.0, step=0.1),
-                "Diff_USD": st.column_config.NumberColumn("조정 필요 금액($)", format="$%.2f"),
-                "Action": st.column_config.TextColumn("리밸런싱 액션 (1주 또는 5% 이상)", width="medium")
-            },
-            use_container_width=True,
-            key="rebalance_editor",
-            on_change=update_target_ratio_callback
-        )
+                
+                # 텍스트 안내 문구 생성
+                if action != "유지" and trade_qty >= 0.01:
+                    action_texts.append(f"➡️ **{ticker}** {action} **{trade_qty:.2f}주** (약 ₩{abs(diff_krw):,.0f})")
+                    
+            # 표(데이터프레임) 출력
+            rebal_df = pd.DataFrame(rebal_data)
+            st.dataframe(
+                rebal_df.style.format({
+                    "현재 비중(%)": "{:.2f}",
+                    "목표 비중(%)": "{:.2f}",
+                    "거래 수량": "{:.2f}",
+                    "거래 금액(₩)": "{:,.0f}"
+                }),
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # 액션 요약 문구 출력
+            st.markdown("<br>", unsafe_allow_html=True)
+            if action_texts:
+                for text in action_texts:
+                    st.markdown(text)
+            else:
+                st.info("현재 목표 비중에 도달하여 추가적인 매매가 필요하지 않습니다.")
 elif menu == "3. 수익 분석":
     st.title("📈 수익 분석")
     
