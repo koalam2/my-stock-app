@@ -535,14 +535,12 @@ if menu == "1. 총 자산 확인":
     goal_col1, goal_col2 = st.columns(2)
     with goal_col1:
         st.markdown(f"**🥇 1차 목표: {saved_goal1:,.0f}원**")
-        # max(0.0, ...) 추가하여 음수 방지
-        prog1 = max(0.0, min(current_total_asset_krw / saved_goal1, 1.0)) if saved_goal1 > 0 else 0.0
+        prog1 = min(current_total_asset_krw / saved_goal1, 1.0) if saved_goal1 > 0 else 0
         st.progress(prog1)
         st.caption(f"달성률: {prog1*100:.1f}% ({current_total_asset_krw:,.0f}원 / {saved_goal1:,.0f}원)")
     with goal_col2:
         st.markdown(f"**🥈 2차 목표: {saved_goal2:,.0f}원**")
-        # max(0.0, ...) 추가하여 음수 방지
-        prog2 = max(0.0, min(current_total_asset_krw / saved_goal2, 1.0)) if saved_goal2 > 0 else 0.0
+        prog2 = min(current_total_asset_krw / saved_goal2, 1.0) if saved_goal2 > 0 else 0
         st.progress(prog2)
         st.caption(f"달성률: {prog2*100:.1f}% ({current_total_asset_krw:,.0f}원 / {saved_goal2:,.0f}원)")
 
