@@ -157,12 +157,14 @@ def get_group_by_sector(sector):
     elif sector in bond: return "채권"
     else: return "기타"
 
+
 # API 데이터 가져오기
 @st.cache_data(ttl=3600)
 def get_exchange_rate():
     try:
         df = fdr.DataReader('USD/KRW', start=datetime.now() - timedelta(days=7))
-        return df['Close'].iloc[-1]
+        # dropna()를 추가하여 결측치(NaN)를 제거하고 마지막 정상 가격을 가져옵니다.
+        return float(df['Close'].dropna().iloc[-1])
     except:
         return 1300.0
 
@@ -170,7 +172,8 @@ def get_exchange_rate():
 def get_current_price(ticker):
     try:
         df = fdr.DataReader(ticker, start=datetime.now() - timedelta(days=7))
-        return df['Close'].iloc[-1]
+        # dropna()를 추가하여 결측치(NaN)를 제거하고 마지막 정상 가격을 가져옵니다.
+        return float(df['Close'].dropna().iloc[-1])
     except:
         return 0.0
 
